@@ -1,0 +1,7 @@
+# .teomach.yml — this repo's method configuration. Skills read this, not memory.
+type: bespoke-service
+overlays: []
+tier: 2
+summary: Lybica Security Scan — the GitHub Action wrapping CVVP
+branching: main
+guard_set: 6
