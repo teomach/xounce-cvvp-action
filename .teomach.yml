@@ -3,5 +3,5 @@ type: bespoke-service
 overlays: []
 tier: 2
 summary: Lybica Security Scan — the GitHub Action wrapping CVVP
-branching: main
+branching: develop-master
 guard_set: 6
