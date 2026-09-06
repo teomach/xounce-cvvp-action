@@ -492,10 +492,10 @@ def render(config: dict, manifest: dict) -> str:
         "**Build work flies as a lane by default.** A flight (`/lead-flight`) "
         "earns its overhead only with several file-disjoint tickets, but one "
         "go-ticket is still one `wingman` tab, dispatched once its agreed "
-        "prompt lands on its issue — not the leader's own hands, and the "
-        "Agent tool never dispatches a lane. Straight through only for small "
-        "closeout work — a docs line, a rebase, answering review — declared "
-        "before starting."
+        "prompt lands on its issue (conversational asks included) — not "
+        "the leader's own hands, and the Agent tool never dispatches a "
+        "lane. Straight through only for small closeout work — a docs "
+        "line, a rebase — declared before starting."
     )
     out.append("")
 
