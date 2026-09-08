@@ -3,11 +3,13 @@
 # edit it there and re-run `scripts/wire-repo.py update`, never edit a copy.
 """PostToolUse (Write|Edit) — a memory saved is a routing decision, asked at the save.
 
-THE RULE IS method/references/memory-routing.md — read it there. What this
-guard prints is that page rendered where it applies, because a guard runs on
-machines the method clone may not be reachable from and a citation nobody can
-open routes nothing. What this docstring covers is only what is this file's
-own: when it fires, when it goes quiet, and what it counts as a memory.
+THE ROUTING RULE IS method/references/memory-routing.md — read it there. What
+this guard prints is that page rendered where it applies, because a guard runs
+on machines the method clone may not be reachable from and a citation nobody
+can open routes nothing; the advisory cites the page only when the routing
+question fired, since the claim clause below is this file's own statement and
+the advisory carries it whole. What this docstring covers is only what is this
+file's own: when it fires, when it goes quiet, and what it counts as a memory.
 
 WHAT IT ADDS over the page is the moment. Routing a fact into a channel must
 not depend on anyone remembering to do it, so the question is asked at the
@@ -25,11 +27,22 @@ is also why the nudge asks for the tracker to be named: a bare `#123` says
 which number but not which repo, so it cannot be told from any other number in
 the file.
 
+A CLAIM OF A HUMAN DECISION IS ASKED FOR ITS ARTEFACT, BESIDE THE CLAIM. A
+memory saying the human approved, ruled, agreed, signed off or authorised is
+asked to cite, within WINDOW characters of the claim, the artefact carrying
+that decision. This clause outranks the silence above: a routed memory is
+exempt from the routing question, never from this one, because a memory store
+can otherwise record an approval no human made and the next session has no
+context to doubt it with. It reads only what this edit introduced, so a claim
+already in the file is not re-asked on every unrelated save.
+
 SCOPE. Markdown under a project's `memory/` directory: the per-project store
 under a `.claude/` tree, and a `memory/` at the root of the repo the session is
-in. The index (`MEMORY.md`) is out of scope — it carries one line per fact and
-the fact's own file is where the routing question belongs, so firing on both
-would ask the same question twice per memory.
+in. The index (`MEMORY.md`) is out of scope for the routing question — it
+carries one line per fact and the fact's own file is where that question
+belongs, so firing on both would ask the same question twice per memory. The
+claim clause does read the index: an index line is a second copy of whatever
+its fact claims, and an uncited approval there is the same false record.
 
 AND IT CARRIES THE SWEEP'S BOOTSTRAP. Why the sweep needs one is the page's,
 under §The sweep; what is this file's own is the moment: when the advisory
@@ -70,6 +83,43 @@ POINTER = re.compile(
     r"https?://\S*/issues/\d+"
     r"|\b[A-Za-z][A-Za-z0-9._-]*(?:/[A-Za-z0-9._-]+)?#\d+\b"
 )
+
+# A claim of a human decision — the words a lane can write on a human's
+# behalf. Advisory like everything here, so the list stays high-recall and a
+# false hit costs one stderr read.
+CLAIM = re.compile(
+    r"\b(?:approved|ruled|agreed|signed[ -]off|authori[sz]ed)\b",
+    re.IGNORECASE,
+)
+
+# What can carry a decision: the pointer forms above, plus a pull-request URL
+# — an approval often lives on a PR review, which POINTER (issues only) does
+# not reach.
+ARTEFACT = re.compile(POINTER.pattern + r"|https?://\S*/pull/\d+")
+
+# How far from the claim its artefact may stand, in characters either side.
+# 160 is the figure teomach-skills#376 sets for both halves of its fix, so one
+# sentence written to satisfy this guard satisfies the cockpit's PR gate too.
+WINDOW = 160
+
+
+def uncited_claims(text: str, introduced: str) -> list[tuple[int, str]]:
+    """Claims of a human decision with no artefact within WINDOW characters.
+
+    Proximity is the substance: a whole-file pointer test was measured letting
+    a false approval through on the strength of pointers that had nothing to
+    do with it, so the citation only counts beside the claim. The
+    introduced-only scoping is the module docstring's.
+    """
+    hits = []
+    for m in CLAIM.finditer(text):
+        if introduced and m.group(0) not in introduced:
+            continue
+        window = text[max(0, m.start() - WINDOW): m.end() + WINDOW]
+        if ARTEFACT.search(window):
+            continue
+        hits.append((text[: m.start()].count("\n") + 1, m.group(0)))
+    return hits
 
 
 def repo_root(cwd: str) -> Path:
@@ -187,8 +237,6 @@ def main() -> None:
     target = Path(raw_path)
     if target.suffix.lower() not in (".md", ".markdown"):
         sys.exit(0)
-    if target.name == INDEX_NAME:
-        sys.exit(0)
 
     repo = repo_root(payload.get("cwd") or "")
     try:
@@ -204,11 +252,38 @@ def main() -> None:
         text = target.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
         text = introduced_text(tool_input)
-    if POINTER.search(text):
+
+    # The two questions this guard asks, each with its own silence. The
+    # routing question skips the index and falls silent once any pointer is in
+    # the file; the claim question does neither — an artefact only cites the
+    # claim it stands beside, and the index line is a second copy of the claim.
+    claims = uncited_claims(text, introduced_text(tool_input))
+    routing_due = target.name != INDEX_NAME and not POINTER.search(text)
+    if not routing_due and not claims:
         sys.exit(0)
 
-    message = [
-        f"A memory was saved: {target.name}",
+    message = [f"A memory was saved: {target.name}"]
+    if routing_due:
+        message += routing_lines()
+    if claims:
+        message += claim_lines(target, text, claims)
+    message += [
+        "",
+        "Advisory: the memory is saved and nothing is blocked. This guard is",
+        "silent on a memory that carries its pointer and cites its claims",
+        "beside them.",
+    ]
+    if routing_due:
+        nudge = sweep_nudge(target)
+        if nudge:
+            message += [""] + nudge
+        message += ["", "The rule: method/references/memory-routing.md"]
+    print("\n".join(message), file=sys.stderr)
+    sys.exit(2)
+
+
+def routing_lines() -> list[str]:
+    return [
         "",
         "Route it before moving on. Is this fact about the method, the",
         "machinery or the estate — something every other repo would otherwise",
@@ -233,16 +308,37 @@ def main() -> None:
         "  that fires, an orientation line, a seed — or after a clean",
         "  cold-flight run. A pull-only channel (a cheatsheet, a references",
         "  page) keeps its pointer, which is the route back to it.",
-        "",
-        "Advisory: the memory is saved and nothing is blocked. This guard is",
-        "silent on a memory that already carries its pointer.",
     ]
-    nudge = sweep_nudge(target)
-    if nudge:
-        message += [""] + nudge
-    message += ["", "The rule: method/references/memory-routing.md"]
-    print("\n".join(message), file=sys.stderr)
-    sys.exit(2)
+
+
+def claim_lines(target: Path, text: str, claims: list[tuple[int, str]]) -> list[str]:
+    lines = text.split("\n")
+    out = [
+        "",
+        "This write claims a human decision without naming where it was made:",
+        "",
+    ]
+    for line_no, phrase in claims[:5]:
+        source = lines[line_no - 1].strip() if line_no <= len(lines) else ""
+        out.append(f"  {target.name}:{line_no}  `{phrase}`")
+        if source:
+            out.append(f"      {source[:110]}")
+    if len(claims) > 5:
+        out.append(f"  … and {len(claims) - 5} more")
+    out += [
+        "",
+        "  A claim that a human approved, ruled, agreed, signed off or",
+        "  authorised names the artefact carrying that decision beside the",
+        "  claim — the issue comment, the PR review, `owner/repo#123` — not",
+        "  merely somewhere in the file. A pointer that is not beside the",
+        "  claim does not point at it.",
+        "",
+        "  A ruling made in conversation is not an artefact yet: post it to",
+        "  the issue first, then cite that comment. And a call that was this",
+        "  session's own is recorded as its own — a lane's judgement, named",
+        "  as one, needs no pointer.",
+    ]
+    return out
 
 
 if __name__ == "__main__":

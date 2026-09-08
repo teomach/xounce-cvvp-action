@@ -1,5 +1,5 @@
-<!-- Source: teomach-skills method/references/judge-doctrine.md @ 081f321 —
-     rendered at guard-set v12 by scripts/wire-repo.py; edit it at source and
+<!-- Source: teomach-skills method/references/judge-doctrine.md @ b159718 —
+     rendered at guard-set v14 by scripts/wire-repo.py; edit it at source and
      re-run `scripts/wire-repo.py update`, never edit this copy. -->
 
 # The judge — lean core
