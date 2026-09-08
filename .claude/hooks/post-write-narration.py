@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Source: teomach-skills harness/hooks/post-write-narration.py —
+# edit it there and re-run `scripts/wire-repo.py update`, never edit a copy.
 """PostToolUse (Write|Edit) — decision narration in markdown, caught at the edit.
 
 The rule is `method/references/history-in-git.md`: a standing artefact carries
@@ -21,6 +23,13 @@ can act on it. Nothing is blocked — the write has already happened, and by
 design: the heuristic is high-precision but it is still a heuristic, and two of
 its hits are sanctioned lines the writer should keep.
 
+**Standing artefacts only.** The rule binds what a later session loads, so two
+places nothing is carried forward from are out of scope: the scratchpad
+directory a session harness hands out under a temp root, where a lane prompt or
+a PR body is staged for `gh --body-file`, and the cross-flight notes folder,
+which `method/references/cross-flight-notes.md` says can be deleted without
+loss. An issue number in either is functional — it is what the file is for.
+
 **When it cannot find the lint it says so and passes.** A skipped check that
 prints nothing reads as a clean one.
 """
@@ -37,6 +46,57 @@ from pathlib import Path
 # Files whose job IS history, per history-in-git.md §Where history does belong.
 EXEMPT_NAMES = {"README.md", "CHANGELOG.md", "IMPROVEMENTS.md", "ROADMAP.md"}
 EXEMPT_DIRS = {"adr", "notes", ".github"}
+
+# Where a session's scratch lands, and where a harness that hands out a
+# scratchpad directory puts it. A repo cloned into /tmp sits here too, which is
+# why a temp root alone is not the test.
+TMP_ROOTS = ("/tmp", "/var/tmp")
+
+
+def is_ephemeral(target: Path, session_id: str) -> bool:
+    """True when nothing on this path is carried forward into a later session.
+
+    The rule guards artefacts that persist: the position that holds now, read
+    again by everyone who loads the file. Two places hold nothing forward, and
+    an issue number in either is functional rather than narrated — so a guard
+    that fired there would be nagging about the one thing that has to be in the
+    file.
+
+    · **The session scratchpad** — the directory a session harness hands out
+      under a temp root, where a lane prompt, an issue body or a PR body is
+      staged for `gh --body-file`. Recognised, never hard-coded: a temp root
+      carrying a `scratchpad` component or this payload's own session id. A
+      temp root alone is not the test — a repo cloned into /tmp is a standing
+      artefact like any other.
+    · **The cross-flight notes folder** — `method/references/cross-flight-notes.md`
+      makes it a folder outside every repo, holds it to one file per note, and
+      says outright that it can be deleted without loss.
+    """
+    notes = os.environ.get("TEOMACH_FLIGHT_NOTES") or str(Path.home() / "Code" / "flight-notes")
+
+    def under(root: str) -> bool:
+        # Both spellings of both sides, because a machine whose /home is a
+        # symlink to /var/home would otherwise compare one directory with
+        # itself and disagree.
+        for here in candidates:
+            for base in (Path(root), Path(root).resolve()):
+                stem = str(base).rstrip("/")
+                if str(here) == stem or str(here).startswith(stem + "/"):
+                    return True
+        return False
+
+    try:
+        candidates = [target.absolute(), target.resolve()]
+    except OSError:
+        candidates = [target.absolute()]
+
+    if under(notes):
+        return True
+    roots = [*TMP_ROOTS, os.environ.get("TMPDIR") or "/tmp"]
+    if not any(under(root) for root in roots):
+        return False
+    parts = set().union(*(set(c.parts) for c in candidates))
+    return "scratchpad" in parts or bool(session_id and session_id in parts)
 
 
 def repo_root(cwd: str) -> Path:
@@ -121,6 +181,8 @@ def main() -> None:
         sys.exit(0)
     if target.name in EXEMPT_NAMES or EXEMPT_DIRS.intersection(target.parts):
         sys.exit(0)
+    if is_ephemeral(target, payload.get("session_id") or ""):
+        sys.exit(0)
     if not target.is_file():
         sys.exit(0)
 
@@ -192,6 +254,13 @@ def main() -> None:
         "  · state the position as it stands, with no reference to what it",
         "    replaced, and put the reasoning in the PR body where the reviewer",
         "    is actually reading;",
+        "  · the one recipe for getting it there: draft the body with the Write",
+        "    tool into this session's scratchpad directory — or anywhere under",
+        "    /tmp, which is what the pollution guard offers for work that is not",
+        "    a deliverable — then `gh pr create --body-file <that file>`. Both",
+        "    guards leave that file alone, so a body may carry as many issue and",
+        "    PR references as the work needs and none of it has to survive shell",
+        "    quoting on the way;",
         "  · keep the line only if it is one of the two sanctioned kinds — an",
         "    as-at or [FLUX] stamp on an external fact, or a functional pointer",
         "    into history a procedure genuinely routes through. The test is",

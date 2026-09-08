@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Source: teomach-skills harness/hooks/_payload.sh —
+# edit it there and re-run `scripts/wire-repo.py update`, never edit a copy.
 # Shared by the shell guards: read the hook payload once, and get fields out of
 # it without assuming which JSON reader a machine has.
 #
@@ -58,8 +60,15 @@ repo_root() {
 ROUTE_REASON_MIN=12
 # The build-file count where closeout stops being credible — the pre-edit
 # guard's refusal point, and the tally's bar for a declared route riding
-# more files than one piece should.
+# more files than one piece should. Read by the guards that source this file
+# (pre-edit-lane-default.sh, stop-lane-tally.sh), a use shellcheck cannot
+# follow across the source:
+# shellcheck disable=SC2034
 LANE_THRESHOLD="${TEOMACH_LANE_THRESHOLD:-3}"
+# How many dirty build files a message names before it trails off — the cap
+# dirty_build_files fills DIRTY_SAMPLE to, and the count the tally's ellipsis
+# turns on. One number, so the sample and its "…" cannot disagree.
+DIRTY_SAMPLE_MAX=3
 
 # The build surface, shared by the lane-default pair. The lane default is
 # the cockpit's, whatever the repo is working on (ruled 2026-09-06): with no
@@ -82,6 +91,27 @@ in_build_surface() {   # in_build_surface <relpath> — 0 when the path is surfa
         case "$1" in "$p"/*) return 0 ;; esac
     done
     return 1
+}
+# dirty_build_files <repo> — sets DIRTY_COUNT, and DIRTY_SAMPLE from the first
+# DIRTY_SAMPLE_MAX of them, comma-joined for a message that names names.
+# build_paths_read must have run for <repo>. `git status --porcelain` puts two
+# status columns and a space before each path, and quotes a path it had to
+# escape, so three characters and a leading quote come off. Both floors count
+# the tree through here, so the pre-edit refusal and the turn-end tally cannot
+# disagree about how many build files are dirty, and an escaping fix lands on
+# one loop rather than two.
+dirty_build_files() {
+    local line f
+    DIRTY_COUNT=0
+    DIRTY_SAMPLE=""
+    while IFS= read -r line; do
+        f="${line:3}"; f="${f#\"}"
+        in_build_surface "$f" || continue
+        DIRTY_COUNT=$((DIRTY_COUNT + 1))
+        [ "$DIRTY_COUNT" -le "$DIRTY_SAMPLE_MAX" ] &&
+            DIRTY_SAMPLE="$DIRTY_SAMPLE${DIRTY_SAMPLE:+, }$f"
+    done < <(git -C "$1" status --porcelain 2>/dev/null)
+    return 0
 }
 route_settled() {   # route_settled <route> — 0 when the declaration parses
     case "$1" in

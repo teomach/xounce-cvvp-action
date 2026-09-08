@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
+# Source: teomach-skills harness/hooks/pre-bash-pr-gate.sh —
+# edit it there and re-run `scripts/wire-repo.py update`, never edit a copy.
 # PreToolUse (Bash) — no pull request opens without a judge report standing for
 # exactly what is about to be shipped.
 #
-# THE TRAVELLING HALF OF THE GATE (criterion 15, the wiring spec). The
-# machine-level flight-pr-gate.sh (teomach-cockpit, machine-config) fires in
-# every session on a machine the cockpit was installed on — and nowhere else,
-# so a wired repo cloned anywhere else opened PRs unjudged. This guard rides in
-# the repo's own resident set, dispatched by .claude/settings.json, and the
-# refusal holds for anyone who clones a wired repo. The judge RUNNER stays the
-# cockpit's; this is the gate, not the runner.
+# THE TRAVELLING HALF OF THE GATE. The machine-level flight-pr-gate.sh
+# (teomach-cockpit, machine-config) fires in every session on a machine the
+# cockpit was installed on — and nowhere else, so a wired repo cloned anywhere
+# else opens PRs unjudged. This guard rides in the repo's own resident set,
+# dispatched by .claude/settings.json, and the refusal holds for anyone who
+# clones a wired repo. The judge RUNNER stays the cockpit's; this is the gate,
+# not the runner.
 #
 # WHAT IT CHECKS, exactly and only: that a judge report exists for the worktree
 # the PR will be opened from, and that it names this branch at this HEAD. The
@@ -17,9 +19,7 @@
 # its header. That path and that header line are the contract with the runner;
 # this guard reads them and writes nothing.
 #
-# THREE DECISIONS, all deliberate. The first two are the machine hook's,
-# preserved exactly; the third is this guard's own ruling on a question the
-# machine hook never had to answer out loud:
+# THREE DECISIONS, all deliberate:
 #
 #   · A report full of FAILs still opens a PR. Dissent is a legitimate route —
 #     a finding you disagree with is recorded with its evidence in the PR body,
@@ -49,7 +49,7 @@
 # loud: the refusal names the missing runner, where it comes from, and the
 # stated-bypass route. Closed and loud, never open and silent.
 #
-# HONEST LIMITS — the machine hook's, measured, plus this layer's own:
+# HONEST LIMITS, measured rather than assumed:
 #
 #   · A missing or non-executable hook script FAILS OPEN (measured, Claude
 #     Code 2.1.212 and 2.1.220). session-start-wired.sh tests for this guard
@@ -78,21 +78,20 @@
 # or an `export FLIGHT_PR_UNJUDGED=…` typed in the same command string — never
 # as the name appearing inside a quoted argument, which is data like any
 # other. A --title or --body that merely mentions the variable neither opens
-# the hatch nor trips the reason check. UNLIKE the
-# machine hook, this guard keeps no bypass log. The resident guard set only
-# reads and refuses — no guard writes outside the repo — an acceptance
-# criterion of the wiring spec (§10), because this file is work-product
-# executable policy running on every reviewer's machine. On a cockpit machine
-# the machine hook still counts bypasses exactly as before.
+# the hatch nor trips the reason check. UNLIKE the machine hook, this guard
+# keeps no bypass log. The resident guard set only reads and refuses — no
+# guard writes outside the repo — because this file is work-product executable
+# policy running on every reviewer's machine. On a cockpit machine the machine
+# hook still counts bypasses.
 #
-# THE MATCHER IS THE MACHINE HOOK'S, PORTED WHOLE, and its false-positive
-# history is earned: an unanchored regex refused PR COMMENTS that merely
-# mentioned `gh pr create` — once in a comment body, once in a heredoc
-# writing that text to a file. So it walks the string as a shell would and
-# asks a structural question: does any SIMPLE COMMAND begin — after any
-# VAR=value assignments — with the three bare words `gh` `pr` `create`?
-# Command boundaries are `; & | && || newline ( ) { }`; quoted spans and
-# heredoc bodies are read as data, redirection targets as filenames. It
+# THE MATCHER IS SHARED WITH THE MACHINE HOOK, and it is structural rather
+# than a regex for a reason: an unanchored pattern refuses commands that
+# merely MENTION `gh pr create` — inside a comment or `--body` argument,
+# inside a heredoc writing that text to a file. So it walks the string as a
+# shell would and asks a structural question: does any SIMPLE COMMAND begin —
+# after any VAR=value assignments — with the three bare words `gh` `pr`
+# `create`? Command boundaries are `; & | && || newline ( ) { }`; quoted spans
+# and heredoc bodies are read as data, redirection targets as filenames. It
 # refuses to look inside quotes DELIBERATELY: `"gh" pr create` really does
 # invoke gh and is not seen — nobody writes that except to evade, evasion is
 # already conceded above, and not reasoning about quoted text is precisely

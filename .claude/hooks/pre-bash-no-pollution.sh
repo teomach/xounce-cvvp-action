@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Source: teomach-skills harness/hooks/pre-bash-no-pollution.sh —
+# edit it there and re-run `scripts/wire-repo.py update`, never edit a copy.
 # PreToolUse (Bash) — the environment ladder's floor, made mechanical.
 #
 # Three refusals, and only three:
@@ -13,6 +15,19 @@
 #   3. a write to an absolute path outside this repo — the same hygiene from the
 #      other side, since what a job's failure leaks into is the question the
 #      ladder asks when choosing a rung.
+#
+# WHAT IS NOT "OUTSIDE", and why refusing it would be refusing the work:
+#
+#   · the temp roots, which are this guard's OWN alternative to a write outside
+#     the tree ("scratch work that is not a deliverable — /tmp", in the refusal
+#     below) and where a session harness that hands out a scratchpad directory
+#     puts it — so a lane prompt or a PR body drafted for `gh --body-file`
+#     lands there;
+#   · the leader-to-leader notes folder of
+#     `method/references/cross-flight-notes.md`, whose transport IS "a plain
+#     shared folder outside every repo".
+#
+# `inside()` names both.
 #
 # THE FLOOR, NOT THE LADDER. The ladder chooses a rung per job, weighs what a
 # failure would leak into, and knows when a `podman` world is worth spinning up.
@@ -38,6 +53,10 @@
 #     is evidence for.
 #   · `>` inside a quoted string reads as a redirection. Over-refusing an `echo`
 #     is a nuisance; under-refusing a write is the failure worth having.
+#   · A heredoc's body is data and not command text, so it is stripped before
+#     the scans read it — the block above them says why. The cost is real and
+#     runs the other way: a multi-line `<<` that is a shift rather than a
+#     heredoc takes the lines after it with it, and those lines go unscanned.
 #
 # WHY DENY RATHER THAN ASK. The model sees the stderr of an `exit 2` and acts on
 # it, so a refusal naming the exact alternative gets repaired by the agent with
@@ -69,7 +88,7 @@ refuse() {   # refuse <headline> <what-to-do-instead...>
 
 # A path this repo's work may write to. Anything else absolute is outside.
 inside() {
-    local p="$1"
+    local p="$1" notes
     p="${p%\"}"; p="${p#\"}"; p="${p%\'}"; p="${p#\'}"
     # The patterns below are literal text in someone else's command string, not
     # paths for this shell to expand — hence the quoting shellcheck warns about.
@@ -89,6 +108,12 @@ inside() {
     if [ -n "${TMPDIR:-}" ]; then
         case "$p" in "${TMPDIR%/}"|"${TMPDIR%/}"/*) return 0 ;; esac
     fi
+    # The cross-flight notes folder. Its reference makes "a plain shared folder
+    # outside every repo" the whole transport, so the guard has to know the
+    # name: `~/Code/flight-notes/` as that page gives it, with
+    # $TEOMACH_FLIGHT_NOTES for a machine that puts it elsewhere.
+    notes="${TEOMACH_FLIGHT_NOTES:-$HOME/Code/flight-notes}"
+    case "$p" in "${notes%/}"|"${notes%/}"/*) return 0 ;; esac
     return 1
 }
 
@@ -105,6 +130,58 @@ outside_write() {   # outside_write <path> <verb>
 "  · a service, a pinned runtime or a destructive test beside the job —" \
 "    an ephemeral \`podman compose\` world, torn down after"
 }
+
+# A heredoc's body is data, not command text: everything from the `<<DELIM`
+# line to the delimiter line. It is removed before either scan below reads
+# $CMD, because left in, the first `>` in a line of prose opens a redirection
+# target — a document mentioning `~/.claude/projects/<key>/*.jsonl` was refused
+# as a write to `/*.jsonl`, and `cat > file <<'MD'` is how a session writes a
+# document at all. It is the same distinction the `sed` case makes further
+# down between a script and a file operand: what a token IS beats what it
+# looks like.
+#
+# What survives the strip, deliberately: the operator line itself, so
+# `cat > /etc/motd <<'MD'` still refuses; every line after the delimiter,
+# so a second command in the same string is still read; and `<<<`, which is a
+# here-string carrying its word on that line and no body at all. Several
+# heredocs on one line take their bodies in order, hence a queue of pending
+# delimiters, and `<<-` lets the line that ends it be indented with tabs.
+CMD="$(printf '%s\n' "$CMD" | awk '
+    BEGIN {
+        q  = sprintf("%c", 39)
+        RE = "<<-?[ \t]*(\\\\?[A-Za-z_][A-Za-z0-9_]*|\"[^\"]*\"|" q "[^" q "]*" q ")"
+    }
+    function delim_of(tok,   d, c) {
+        d = tok
+        sub(/^<<-?[ \t]*/, "", d)
+        c = substr(d, 1, 1)
+        if (c == "\\") return substr(d, 2)
+        if (c == "\"" || c == q) return substr(d, 2, length(d) - 2)
+        return d
+    }
+    {
+        if (pending > 0) {                      # inside a body: drop it
+            line = $0
+            if (dash[1]) sub(/^\t+/, "", line)
+            if (line == delim[1]) {
+                for (i = 1; i < pending; i++) { delim[i] = delim[i+1]; dash[i] = dash[i+1] }
+                pending--
+            }
+            next
+        }
+        rest = $0
+        while (match(rest, RE)) {
+            tok  = substr(rest, RSTART, RLENGTH)
+            pre  = substr(rest, 1, RSTART - 1)
+            rest = substr(rest, RSTART + RLENGTH)
+            if (pre ~ /<$/) continue          # `<<<word` — a here-string
+            pending++
+            delim[pending] = delim_of(tok)
+            dash[pending]  = (tok ~ /^<<-/)
+        }
+        print
+    }
+')"
 
 # Every redirection target in the command, whatever segment it sits in.
 while read -r t; do
@@ -234,12 +311,42 @@ while IFS= read -r seg; do
         ;;
 
       sed)
+        # Only the FILE operands are paths. sed's operands are a script — but
+        # only when no `-e`/`-f` already supplied one — followed by the files it
+        # edits. Read every non-flag word as a path and the `/^x/d` of `sed -i
+        # '/^x/d' notes.md` is a write to `/`: an address is a script, not a
+        # directory. `-e`/`-f` take a value, attached or as the next word;
+        # `-i`'s value is a suffix and is always attached.
+        sed_in_place=""; sed_script=""; sed_skip=""; sed_operands=""
+        sed_files=()
         for a in ${args[@]+"${args[@]}"}; do
-            case "$a" in -i|-i*|--in-place*)
-                for b in ${bare[@]+"${bare[@]}"}; do outside_write "$b" "sed -i"; done
-                break ;;
-            esac
+            if [ -n "$sed_skip" ]; then sed_skip=""; continue; fi
+            if [ -z "$sed_operands" ]; then
+                case "$a" in
+                  --)                     sed_operands=1; continue ;;
+                  --in-place|--in-place=*) sed_in_place=1; continue ;;
+                  --expression|--file)    sed_script=1; sed_skip=1; continue ;;
+                  --expression=*|--file=*) sed_script=1; continue ;;
+                  --*)                    continue ;;
+                  -?*)
+                    rest="${a#-}"
+                    while [ -n "$rest" ]; do
+                        c="${rest%"${rest#?}"}"; rest="${rest#?}"
+                        case "$c" in
+                          e|f) sed_script=1
+                               if [ -n "$rest" ]; then rest=""; else sed_skip=1; fi ;;
+                          i)   sed_in_place=1; rest="" ;;   # the rest is the suffix
+                        esac
+                    done
+                    continue ;;
+                esac
+            fi
+            if [ -z "$sed_script" ]; then sed_script=1; continue; fi   # the script
+            sed_files+=("$a")
         done
+        if [ -n "$sed_in_place" ]; then
+            for b in ${sed_files[@]+"${sed_files[@]}"}; do outside_write "$b" "sed -i"; done
+        fi
         ;;
     esac
 
