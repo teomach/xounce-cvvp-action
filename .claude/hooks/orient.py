@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Source: teomach-skills harness/orient/orient.py —
+# edit it there and re-run `scripts/wire-repo.py update`, never edit a copy.
 """Generate a repo's orientation text from its declarations.
 
 Reads `.teomach.yml` and the `profiles/<type>.yml` it names, and writes the
@@ -27,22 +29,38 @@ it and `session-start-orient.sh` beside it runs it at session start. By hand,
 Add `--profiles DIR` where the manifests live somewhere else.
 
 Exit status: 0 with the orientation on stdout, or 2 with a refusal on stdout
-naming the file at fault. There is no third outcome — never a half-orientation.
+naming the file at fault. A refusal is whole — never a half-orientation
+assembled from defaults. A page whose *citations* have gone dark is neither of
+those: it renders, and declares what is dark. Which citation failure gets which
+answer is `harness/orient/README.md` §Citations survive being tidied; what the
+degrading one costs and says is §What a dead link costs.
 """
 
 from __future__ import annotations
 
 import argparse
 import os
+import re
 import sys
 from pathlib import Path
 
 CONFIG_NAME = ".teomach.yml"
 
-# The kernel's references are reachable from any installed kernel skill, because
-# `.claude/skills/<skill>` is a symlink into the method clone and `..` walks the
-# real tree. `setup` is the anchor: every bundle links the kernel.
+# Where the machine's install of the kernel is reachable from inside a repo —
+# every bundle links `setup`. `_find_profiles` resolves it *physically*, and
+# nothing prints it: printed citations go through METHOD_LINK below.
 ANCHOR = ".claude/skills/setup"
+
+# The pages every orientation cites, through the `.claude/method` link
+# `wire-repo.py` keeps pointed at the physically-resolved method clone: one
+# terminal symlink and no `..`, so each path is its own normalisation. Why no
+# printed path may put `..` behind a symlink is stated once, in
+# `harness/orient/README.md` §Citations survive being tidied — beside this
+# file's first home, and reachable through this very link
+# (`.claude/method/harness/orient/README.md`) from its second.
+METHOD_LINK = ".claude/method"
+MODELS_PAGE = f"{METHOD_LINK}/MODELS.md"
+REFERENCES_DIR = f"{METHOD_LINK}/method/references"
 
 TRACKERS = ("simple", "complex")
 BRANCHINGS = ("main", "develop-master")
@@ -418,8 +436,217 @@ BRANCH_PROSE = {
 
 REFERENCES = ("history-in-git.md", "environment-ladder.md", "judge-doctrine.md")
 
+# What a citation to a page that does not open here is marked with, wherever
+# it is printed. One mark, so the notice at the top can name it and a reader
+# can find every one of them by eye.
+MISSING_MARK = " (missing)"
 
-def render(config: dict, manifest: dict) -> str:
+# A `..` path segment, and not an ellipsis: `...` never matches.
+_DOTDOT = re.compile(r"(?<!\.)\.\./|/\.\.(?!\.)")
+
+
+def _cited_pages() -> tuple[str, ...]:
+    """Every page the orientation prints a path to, in the order it prints them."""
+    return (MODELS_PAGE, *(f"{REFERENCES_DIR}/{name}" for name in REFERENCES))
+
+
+def _check_citations(repo: Path) -> list[str]:
+    """The cited pages that do not open from this repo — a list, not a raise.
+
+    The check's two halves part company: normalisation raises, and a page that
+    does not open is returned for the caller to declare. `is_file` alone would
+    let the first half through, because it resolves `..` the way the kernel
+    does and so passes a citation that works only copied verbatim.
+
+    Why the halves differ, and why normalisation is the one that raises:
+    `README.md` §Citations survive being tidied. What the returned half then
+    costs and says: §What a dead link costs.
+    """
+    missing = []
+    for rel in _cited_pages():
+        if os.path.normpath(rel) != rel:
+            raise Refusal(
+                f"orientation citation `{rel}` does not survive normalisation — "
+                f"a reader who tidies it holds `{os.path.normpath(rel)}`. Cite "
+                f"through `{METHOD_LINK}` with no `.` or `..` segments."
+            )
+        if not (repo / rel).is_file():
+            missing.append(rel)
+    return missing
+
+
+# --------------------------------------------------------------------------
+# The repair line — an instruction that can be followed from where it is read.
+#
+# What it answers is `_repair`'s docstring, below. *Why* those are the answers
+# — what naming no clone was measured to cost, and why a worktree is told not
+# to rewire — is stated once, in `harness/orient/README.md` §What a dead link
+# costs, the same place and for the same reason the citation rule is (see
+# METHOD_LINK above).
+# --------------------------------------------------------------------------
+
+
+def _is_clone(path: Path) -> bool:
+    """Does this directory hold the installer and the manifests it reads?
+
+    Both, because either alone is satisfied by something else: `profiles/`
+    exists in a fixture, and a stray copy of the installer is not a clone.
+    """
+    return (path / "scripts" / "wire-repo.py").is_file() and (path / "profiles").is_dir()
+
+
+def _resolve_clone(repo: Path) -> Path | None:
+    """A teomach-skills clone this repo can name, or None to ask the human.
+
+    The same order `_find_profiles` resolves the manifests in, for the same
+    reason — the kernel symlink already says where the method is, so nothing
+    has to be configured — with the repo itself last, because a repo that
+    carries the installer can run its own.
+    """
+    candidates: list[Path] = []
+    env = os.environ.get("TEOMACH_PROFILES")
+    if env:
+        candidates.append(Path(env).parent)
+    anchor = repo / ANCHOR
+    if anchor.is_symlink() or anchor.is_dir():
+        # <clone>/method/setup -> up two is the clone root.
+        candidates.append(anchor.resolve().parent.parent)
+    candidates.append(repo)
+    for candidate in candidates:
+        try:
+            resolved = candidate.resolve()
+        except OSError:
+            continue
+        if _is_clone(resolved):
+            return resolved
+    return None
+
+
+def _is_worktree_pointer(text: str) -> bool:
+    """Is this the body of a worktree's `.git` file?
+
+    `git worktree add` writes `gitdir: <clone>/.git/worktrees/<name>`. A
+    submodule's `.git` file has the same key and no `worktrees` segment, so
+    the segment is what is read, not the key.
+
+    Both separators, because the file is git's and not this platform's: a
+    wired repo is read on whatever machine cloned it, and `os.sep` would make
+    the answer depend on where the question is asked rather than on what git
+    wrote.
+    """
+    for line in text.splitlines():
+        key, sep, value = line.partition(":")
+        if sep and key.strip() == "gitdir":
+            return "/worktrees/" in value.strip().replace("\\", "/")
+    return False
+
+
+def _is_worktree(repo: Path) -> bool:
+    dot_git = repo / ".git"
+    if not dot_git.is_file():
+        return False
+    try:
+        return _is_worktree_pointer(dot_git.read_text(encoding="utf-8"))
+    except OSError:
+        return False
+
+
+def _repair(repo: Path) -> str:
+    """What to do about the dead link, said to whoever is reading this tree.
+
+    Two axes, and both are read from the tree rather than assumed: *who acts*
+    (a worktree's answer is not the session in it) and *whether a clone can be
+    named* (if not, that is said, not left as a search).
+    """
+    where = repo.resolve()
+    clone = _resolve_clone(repo)
+    command = (
+        f"`python3 {clone if clone is not None else '<clone>'}"
+        f"/scripts/wire-repo.py update --repo {where}`"
+    )
+    if _is_worktree(repo):
+        who = (
+            "**Do not rewire this tree.** It is a git worktree, and "
+            "`wire-repo.py update` re-applies the whole resident set — "
+            "`.claude/hooks/`, `.claude/settings.json` and `CLAUDE.md`'s "
+            "managed block, all tracked — so whatever of it is behind the "
+            "current standard lands in this branch's diff, mid-flight. Work "
+            "without the pages, say where you report that you did, and leave "
+            "the fix to the human: "
+        )
+    else:
+        who = "Restore it with "
+    if clone is None:
+        return (
+            f"{who}{command} — no teomach-skills clone resolves from here, so "
+            f"the human supplies `<clone>`; do not go looking for one."
+        )
+    return f"{who}{command}."
+
+
+def _link_state(repo: Path) -> str:
+    """Why the cited pages do not open, in the words a human can act on."""
+    link = repo / METHOD_LINK
+    if link.exists():
+        return "resolves, but the clone behind it does not hold them"
+    if link.is_symlink():
+        # The *resolved* target, never `os.readlink`: a relative link body can
+        # carry `..`, and no `..` segment may reach the page (`_check_normal`).
+        return f"points at `{Path(os.path.realpath(link))}`, which is not there"
+    return "does not exist"
+
+
+def _degraded_notice(repo: Path, missing: list[str]) -> str:
+    """The first thing a degraded page says: what is dark, and what to do.
+
+    The standing rules collapse to their directory when all of them are gone,
+    which is the common case — the whole link is dead — and keeps the notice
+    to two names rather than four.
+    """
+    refs = [f"{REFERENCES_DIR}/{name}" for name in REFERENCES]
+    shown = [rel for rel in missing if rel not in refs]
+    if all(rel in missing for rel in refs):
+        shown.append(f"{REFERENCES_DIR}/")
+    else:
+        shown += [rel for rel in refs if rel in missing]
+    return (
+        f"**Degraded.** {'These pages' if len(shown) > 1 else 'This page'} the "
+        f"orientation cites {'do' if len(shown) > 1 else 'does'} not open here: "
+        + ", ".join(f"`{rel}`" for rel in shown)
+        + f". `{METHOD_LINK}` — the link to the method clone — {_link_state(repo)}. "
+        + _repair(repo)
+        + f"\n\nEverything else below stands. Do not reconstruct a page marked "
+        f"{MISSING_MARK.strip()} from memory: work without it, and say so where "
+        f"you report."
+    )
+
+
+def _check_normal(text: str) -> str:
+    """No `..` path segment reaches the page, whichever input supplied it."""
+    for line in text.splitlines():
+        if _DOTDOT.search(line):
+            raise Refusal(
+                f"the orientation would print a path with a `..` segment: "
+                f"`{line.strip()}`. That resolves only when copied verbatim; "
+                f"rewrite the citation to open through `{METHOD_LINK}`, or as "
+                f"a path with no `..` segments."
+            )
+    return text
+
+
+def render(config: dict, manifest: dict, repo: Path) -> str:
+    missing = _check_citations(repo)
+
+    def cite(rel: str) -> str:
+        """A cited path, marked where it does not open from this repo."""
+        return f"`{rel}`" + (MISSING_MARK if rel in missing else "")
+
+    def cite_name(name: str) -> str:
+        """A standing rule by bare name, marked the same way."""
+        return f"`{name}`" + (
+            MISSING_MARK if f"{REFERENCES_DIR}/{name}" in missing else ""
+        )
+
     tier = config.get("tier", manifest.get("tier_default"))
     hints = manifest.get("skills_hint") or []
     overlays = config.get("overlays") or []
@@ -430,6 +657,12 @@ def render(config: dict, manifest: dict) -> str:
     branching = config.get("branching") or manifest["branching"]
 
     out = ["# Orientation — the method you are working inside", ""]
+
+    # Before anything a session might act on, and only when there is something
+    # to say: a whole page never carries a word about degradation.
+    if missing:
+        out.append(_degraded_notice(repo, missing))
+        out.append("")
 
     repo_line = config.get("summary") or config.get("description")
     if repo_line:
@@ -503,7 +736,7 @@ def render(config: dict, manifest: dict) -> str:
     out.append(
         f"**Fit** — one line before substantive work, carried in a commit "
         f"body (the judge looks for it): the hardest act, the tier it needs "
-        f"per `{ANCHOR}/../../MODELS.md`, whether your model fits — only the "
+        f"per {cite(MODELS_PAGE)}, whether your model fits — only the "
         f"human can switch — and the cut that fits the context window with "
         f"room for judge rounds."
     )
@@ -517,14 +750,17 @@ def render(config: dict, manifest: dict) -> str:
     )
     out.append("")
 
+    # Each rule marked on its own name, never the directory holding them: one
+    # dark page does not make the other two unreadable, and a mark on the
+    # directory would tell a reader to skip pages that open.
     out.append(
-        f"**Standing rules** in `{ANCHOR}/../references/` — "
-        + ", ".join(f"`{f}`" for f in REFERENCES)
+        f"**Standing rules** in `{REFERENCES_DIR}/` — "
+        + ", ".join(cite_name(name) for name in REFERENCES)
         + ": read the page, do not reconstruct it."
     )
     out.append("")
     out.append("Depth lives in the skills. This is the map, not the method.")
-    return "\n".join(out) + "\n"
+    return _check_normal("\n".join(out) + "\n")
 
 
 def refusal_text(message: str) -> str:
@@ -545,7 +781,7 @@ def main(argv: list[str] | None = None) -> int:
     profiles = Path(args.profiles) if args.profiles else None
     try:
         config, manifest, _ = load(Path(args.repo), profiles)
-        sys.stdout.write(render(config, manifest))
+        sys.stdout.write(render(config, manifest, Path(args.repo)))
         return 0
     except Refusal as exc:
         sys.stdout.write(refusal_text(str(exc)))

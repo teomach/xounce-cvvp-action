@@ -4,7 +4,7 @@ The check every repo starts with, and often the only one it needs.
 
 **The standard is the PR's own stated intent.** What a verdict means, what a
 finding does and why the judge filters rather than approves are in
-`.claude/skills/setup/../references/judge-doctrine.md` — read it there, do not re-derive it here.
+`docs/standards/judge-doctrine.md` — read it there, do not re-derive it here.
 
 Judge three things:
 
@@ -22,7 +22,7 @@ Judge three things:
 
 Where the repo is wired (`.teomach.yml` present), one more: **the fit line
 travelled.** The orientation demands one line — the hardest act, the tier it
-needs per `MODELS.md`, the cut — carried in a commit body on the branch.
+needs per `docs/standards/MODELS.md`, the cut — carried in a commit body on the branch.
 Judge its presence, not its wisdom: no fit line anywhere in the branch's
 messages means the session defaulted silently, and that is a finding;
 choosing the tier was never the judge's to do.

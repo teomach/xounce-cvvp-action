@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Source: teomach-skills harness/orient/session-start.sh —
+# edit it there and re-run `scripts/wire-repo.py update`, never edit a copy.
 # SessionStart hook: print the repo's orientation, and nothing else.
 #
 # stdout is what the session reads, so this relays the generator verbatim —

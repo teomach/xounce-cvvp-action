@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Source: teomach-skills harness/hooks/pre-bash-stage-by-path.sh —
+# edit it there and re-run `scripts/wire-repo.py update`, never edit a copy.
 # PreToolUse (Bash) — the lane's staging discipline, made mechanical: stage by
 # path, never by sweep.
 #

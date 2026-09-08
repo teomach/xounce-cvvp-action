@@ -8,8 +8,9 @@
 ## The method, as this repo carries it
 
 Wired for the Teòmach method — but **a fresh clone or a post-merge checkout is
-unwired until rewired**: `.claude/skills/` is generated into this machine's
-install and never committed, so it does not travel. Run
+unwired until rewired**: `.claude/skills/` and the `.claude/method` link are
+generated against this machine's install and never committed, so they do not
+travel. Run
 `scripts/wire-repo.py update --repo .` from a teomach-skills clone; the same
 verb re-applies the current standard any other day, reporting what it changes.
 Start a session without it and the SessionStart guard says so loudly and

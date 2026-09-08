@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Source: teomach-skills harness/hooks/pre-agent-lane-dispatch.sh —
+# edit it there and re-run `scripts/wire-repo.py update`, never edit a copy.
 # PreToolUse (Agent) — no lane leaves this session as a subagent.
 #
 # THE BOUNDARY THIS NAMES. The harness's Agent tool can do everything a lane

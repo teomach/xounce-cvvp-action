@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Source: teomach-skills harness/hooks/stop-lane-tally.sh —
+# edit it there and re-run `scripts/wire-repo.py update`, never edit a copy.
 # Stop — uncommitted build-path work in a cockpit session, tallied for the
 # human at turn end.
 #
@@ -57,27 +59,28 @@ if [ -n "$sid" ]; then
     route_settled "${route:-}" || route=""
 fi
 
-dirty=0
-sample=""
-while IFS= read -r line; do
-    f="${line:3}"; f="${f#\"}"
-    in_build_surface "$f" || continue
-    dirty=$((dirty + 1))
-    [ "$dirty" -le 3 ] && sample="$sample${sample:+, }$f"
-done < <(git -C "$REPO" status --porcelain 2>/dev/null)
-[ "$dirty" -gt 0 ] || exit 0
+# The count and its sample are the pair's one loop (_payload.sh), so this
+# tally and the pre-edit refusal are reading the same tree the same way.
+dirty_build_files "$REPO"
+[ "$DIRTY_COUNT" -gt 0 ] || exit 0
 
+# The arms differ in two clauses and nothing else — what the state is, and
+# what to do about it. The sentence around them is built once, below, so the
+# count, the repo name, the sample and its "…" cannot come to differ between
+# a declared turn and an undeclared one.
 if [ -n "$route" ]; then
     # Declared: quiet within one piece's worth, loud when the ride grows.
-    [ "$dirty" -gt "$LANE_THRESHOLD" ] || exit 0
-    msg="Cockpit tally: $dirty uncommitted build-path file(s) in $(basename "$REPO") riding under one declaration — \"$route\" ($sample"
-    [ "$dirty" -gt 3 ] && msg="$msg, …"
-    msg="$msg). A declaration names one piece of work; if this is a second, it re-declares or flies as a lane."
+    [ "$DIRTY_COUNT" -gt "$LANE_THRESHOLD" ] || exit 0
+    state="riding under one declaration — \"$route\""
+    advice="A declaration names one piece of work; if this is a second, it re-declares or flies as a lane."
 else
-    msg="Cockpit tally: $dirty uncommitted build-path file(s) in $(basename "$REPO") with no lane and no routing declaration ($sample"
-    [ "$dirty" -gt 3 ] && msg="$msg, …"
-    msg="$msg). More than closeout wants an issue and a wingman."
+    state="with no lane and no routing declaration"
+    advice="More than closeout wants an issue and a wingman."
 fi
+
+msg="Cockpit tally: $DIRTY_COUNT uncommitted build-path file(s) in $(basename "$REPO") $state ($DIRTY_SAMPLE"
+[ "$DIRTY_COUNT" -gt "$DIRTY_SAMPLE_MAX" ] && msg="$msg, …"
+msg="$msg). $advice"
 
 esc() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | tr -d '\n'; }
 printf '{"systemMessage":"%s"}\n' "$(esc "$msg")"

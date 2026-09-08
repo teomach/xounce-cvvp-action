@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Source: teomach-skills harness/hooks/session-start-wired.sh —
+# edit it there and re-run `scripts/wire-repo.py update`, never edit a copy.
 # SessionStart — is this repo wired, and is its guard set the current one?
 #
 # WHY THIS EXISTS. A PreToolUse hook whose script is missing or not executable
@@ -26,7 +28,7 @@ set -uo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/_payload.sh"
 
 HOOKS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-GUARDS=(session-start-wired.sh pre-bash-no-pollution.sh pre-bash-stage-by-path.sh pre-bash-pr-gate.sh pre-agent-lane-dispatch.sh pre-edit-lane-default.sh post-write-narration.py stop-uncommitted.sh stop-lane-tally.sh)
+GUARDS=(session-start-wired.sh pre-bash-no-pollution.sh pre-bash-stage-by-path.sh pre-bash-pr-gate.sh pre-agent-lane-dispatch.sh pre-edit-lane-default.sh post-write-narration.py post-write-memory-routing.py stop-uncommitted.sh stop-lane-tally.sh)
 
 payload_read
 REPO="$(repo_root "$(json_str cwd)")"
@@ -100,7 +102,7 @@ else
 fi
 
 # --- can the shell guards read their own payload? ---------------------------
-[ -n "$(json_reader)" ] || add "neither jq nor python3 is on PATH — the Bash and Stop guards will fail open silently."
+[ -n "$(json_reader)" ] || add "neither jq nor python3 is on PATH — every guard that reads the tool payload will fail open silently."
 
 # --- emit -------------------------------------------------------------------
 # JSON assembled by hand so that a machine missing every optional tool still
@@ -108,7 +110,7 @@ fi
 esc() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | awk '{printf "%s\\n", $0}'; }
 
 if [ "${#problems[@]}" -eq 0 ]; then
-    ctx="Teòmach guards v$installed are installed, dispatched and current in this repo: Bash calls are checked for global installs, writes outside the tree, and sweep staging (\`git add -A\`/\`git commit -a\` — stage by path), \`gh pr create\` for a judge report standing for this branch at HEAD, Agent calls for lane-shaped dispatches (lanes fly as \`wingman\` tabs), cockpit edits under the repo's declared build paths for a routing declaration (build work flies as a lane; straight-through is declared, not asked), markdown edits for decision narration, and the end of each turn for uncommitted work and untallied build-path changes."
+    ctx="Teòmach guards v$installed are installed, dispatched and current in this repo: Bash calls are checked for global installs, writes outside the tree, and sweep staging (\`git add -A\`/\`git commit -a\` — stage by path), \`gh pr create\` for a judge report standing for this branch at HEAD, Agent calls for lane-shaped dispatches (lanes fly as \`wingman\` tabs), cockpit edits under the repo's declared build paths for a routing declaration (build work flies as a lane; straight-through is declared, not asked), markdown edits for decision narration, memory writes for the routing question (does this fact belong in a channel?), and the end of each turn for uncommitted work and untallied build-path changes."
     printf '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"%s"}}\n' "$(esc "$ctx")"
     exit 0
 fi

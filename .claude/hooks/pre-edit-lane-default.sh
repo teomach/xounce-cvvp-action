@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
+# Source: teomach-skills harness/hooks/pre-edit-lane-default.sh —
+# edit it there and re-run `scripts/wire-repo.py update`, never edit a copy.
 # PreToolUse (Write|Edit) — build work in a cockpit session routes to a lane,
 # or says in one line why it is staying in these hands.
 #
-# THE BOUNDARY THIS NAMES. The lane default has two escape routes and the v6
-# set guarded only one: pre-agent-lane-dispatch.sh stops a lane leaving as a
-# subagent, but a session building substantive work with its own Edit/Write
-# hands passed unremarked. The observed shape (two independent specimens, one
-# with no deadline at all): work arrives in conversation, no issue exists, so
-# the lane default's trigger never fires and building starts by momentum —
-# the deviation feels like responsiveness. The method has to speak at the
-# moment of choice, and for this route nothing did.
+# THE BOUNDARY THIS NAMES. The lane default has two escape routes, and this
+# guard covers the second: pre-agent-lane-dispatch.sh stops a lane leaving as
+# a subagent, but a session building substantive work with its own Edit/Write
+# hands passes unremarked. The failure runs: work arrives in conversation, no
+# issue exists, so the lane default's trigger never fires and building starts
+# by momentum — the deviation feels like responsiveness. The method has to
+# speak at the moment of choice, and on this route nothing else does.
 #
 # WHAT IT ASKS IS A DECLARATION, NEVER PERMISSION. The refusal prints two
 # forms and either unblocks the session immediately — an overnight leader
@@ -29,11 +30,10 @@
 # WHERE IT STAYS SILENT, deliberately — every check is a cheap read:
 #
 #   · Outside the build surface. The lane default is the cockpit's whatever
-#     the repo is working on (ruled 2026-09-06), so with no `build_paths:`
-#     in .teomach.yml the whole tree is the surface; the key NARROWS it,
-#     for a type that knows its low-noise signal (board-games: targets/,
-#     components/). The shared shape is _payload.sh's build_paths_read /
-#     in_build_surface.
+#     the repo is working on, so with no `build_paths:` in .teomach.yml the
+#     whole tree is the surface; the key NARROWS it, for a type that knows
+#     its low-noise signal (board-games: targets/, components/). The shared
+#     shape is _payload.sh's build_paths_read / in_build_surface.
 #   · No $ZELLIJ — a bare terminal session is not the cockpit, and the lane
 #     default is a cockpit discipline. An Alt-t tab inside a flight counts as
 #     the cockpit, which is the right reading: it shares the board.
@@ -101,13 +101,11 @@ signal=""
 if ! git -C "$REPO" ls-files --error-unmatch -- "$rel" >/dev/null 2>&1; then
     signal="a new file under a build path ($rel) — closeout rarely creates one"
 else
-    dirty=0
-    while IFS= read -r line; do
-        f="${line:3}"; f="${f#\"}"
-        in_build_surface "$f" && dirty=$((dirty + 1))
-    done < <(git -C "$REPO" status --porcelain 2>/dev/null)
-    [ "$dirty" -ge "$LANE_THRESHOLD" ] &&
-        signal="$dirty distinct build files already changed this session — the first edit or two is closeout; this is a build"
+    # The count is the pair's one loop (_payload.sh), so this refusal and the
+    # turn-end tally are reading the same tree the same way.
+    dirty_build_files "$REPO"
+    [ "$DIRTY_COUNT" -ge "$LANE_THRESHOLD" ] &&
+        signal="$DIRTY_COUNT distinct build files already changed this session — the first edit or two is closeout; this is a build"
 fi
 [ -n "$signal" ] || exit 0
 
