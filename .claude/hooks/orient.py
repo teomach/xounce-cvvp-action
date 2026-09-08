@@ -41,6 +41,7 @@ from __future__ import annotations
 import argparse
 import os
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -495,22 +496,52 @@ def _is_clone(path: Path) -> bool:
     return (path / "scripts" / "wire-repo.py").is_file() and (path / "profiles").is_dir()
 
 
+def _clone_above(anchor: Path) -> Path | None:
+    """The clone a `setup` link sits inside: `<clone>/method/setup`, up two.
+
+    One function because two anchors take the same walk — the repo's own
+    kernel link and the machine install's — and a walk written twice is one
+    that can come to disagree about where the method is.
+    """
+    if not (anchor.is_symlink() or anchor.is_dir()):
+        return None
+    try:
+        return anchor.resolve().parent.parent
+    except OSError:
+        return None
+
+
+def _install_dir() -> Path:
+    """The machine's skills install, by the rule `session-start-wired.sh`
+    already resolves its recovery command with: `$TEOMACH_SKILLS_DIR`, else
+    `~/.claude/skills`. Stated twice because one caller is shell and the other
+    is this file; if either moves, both move — the guard's own
+    `install_dir` line is the other half.
+    """
+    return Path(os.environ.get("TEOMACH_SKILLS_DIR") or (Path.home() / ".claude" / "skills"))
+
+
 def _resolve_clone(repo: Path) -> Path | None:
     """A teomach-skills clone this repo can name, or None to ask the human.
 
     The same order `_find_profiles` resolves the manifests in, for the same
     reason — the kernel symlink already says where the method is, so nothing
-    has to be configured — with the repo itself last, because a repo that
-    carries the installer can run its own.
+    has to be configured — then the machine's own install, then the repo
+    itself, because a repo that carries the installer can run its own.
+
+    The machine install is what answers the case the repo's kernel link cannot:
+    a fresh clone or a post-merge checkout has no `.claude/skills/` to resolve
+    *through*, and that is exactly the state the self-heal below exists for. It
+    is the anchor the wiring guard has always used for the same question.
     """
     candidates: list[Path] = []
     env = os.environ.get("TEOMACH_PROFILES")
     if env:
         candidates.append(Path(env).parent)
-    anchor = repo / ANCHOR
-    if anchor.is_symlink() or anchor.is_dir():
-        # <clone>/method/setup -> up two is the clone root.
-        candidates.append(anchor.resolve().parent.parent)
+    for anchor in (repo / ANCHOR, _install_dir() / "setup"):
+        found = _clone_above(anchor)
+        if found is not None:
+            candidates.append(found)
     candidates.append(repo)
     for candidate in candidates:
         try:
@@ -763,6 +794,227 @@ def render(config: dict, manifest: dict, repo: Path) -> str:
     return _check_normal("\n".join(out) + "\n")
 
 
+# --------------------------------------------------------------------------
+# The self-heal
+#
+# RULED, not decided here: teomach-cockpit#226, leader comment of 2026-09-08,
+# built as teomach-skills#377. What the rule is — the precondition, what
+# happens when it holds and what happens when it does not — and why it is in
+# this hook rather than the wiring guard, why the run it makes cannot dirty a
+# tracked file, and what it deliberately leaves to the guard, are stated once,
+# in `harness/orient/README.md` §The self-heal — beside this
+# file's first home, and reachable through
+# `.claude/method/harness/orient/README.md` from its second, the citation
+# METHOD_LINK above makes for the same reason. What is here is the mechanism.
+# --------------------------------------------------------------------------
+
+# The hook's own budget is 15 s (`harness/settings.template.json`). The repair
+# gets less than that, so a repair that hangs costs the session its repair and
+# not its orientation.
+HEAL_TIMEOUT = 10
+
+
+def _installed_version(here: Path) -> str | None:
+    """The guard-set version stamped beside this file.
+
+    Two places for the same reason `session-start.sh` looks in two for
+    `_payload.sh`: installed, the stamp sits in `.claude/hooks/` beside this
+    file; in the clone it is one directory over, in `harness/hooks/`.
+    """
+    for candidate in (here / "VERSION", here.parent / "hooks" / "VERSION"):
+        try:
+            return candidate.read_text(encoding="utf-8").strip()
+        except OSError:
+            continue
+    return None
+
+
+def _generated_layer_faults(repo: Path) -> list[str]:
+    """What of the generated layer is missing — the layer a rewire restores.
+
+    Absence only: a skill link that *dangles* is not a fault of this layer and
+    is not repaired here, for the reason §The self-heal gives.
+    """
+    faults = []
+    if not (repo / METHOD_LINK).exists():
+        faults.append(f"`{METHOD_LINK}` {_link_state(repo)}")
+    skills = repo / ".claude" / "skills"
+    try:
+        if not skills.is_dir():
+            faults.append("`.claude/skills/` does not exist")
+        elif not any(skills.iterdir()):
+            faults.append("`.claude/skills/` is empty")
+    except OSError as exc:
+        faults.append(f"`.claude/skills/` cannot be read ({exc})")
+    return faults
+
+
+def _heal_blocked(repo: Path, here: Path) -> str | None:
+    """Why the ruling's precondition does not hold, or None when it does.
+
+    Read from files, never from a claim in prose. A repo that fails any of
+    these is not "otherwise wired", and its answer is the guard's refusal.
+    """
+    try:
+        config = read_yaml(repo / CONFIG_NAME)
+    except (Refusal, OSError) as exc:
+        return f"{CONFIG_NAME} does not read here ({exc})"
+    declared = config.get("guard_set")
+    if declared is None:
+        return f"{CONFIG_NAME} declares no `guard_set`, so nothing says which set this repo expects"
+    installed = _installed_version(here)
+    if installed is None:
+        return "no VERSION beside this hook, so the installed set cannot be identified"
+    if str(declared).strip() != installed:
+        return (
+            f"the guard set is stale — {CONFIG_NAME} says {declared} and the "
+            f"installed scripts are {installed}"
+        )
+    return None
+
+
+def _git_status(repo: Path) -> list[str] | None:
+    """Every line `git status --porcelain` prints, or None where it could not
+    be asked — which is not the same as a clean tree and is never reported as
+    one."""
+    try:
+        done = subprocess.run(
+            ["git", "-C", str(repo), "status", "--porcelain"],
+            capture_output=True, text=True, timeout=HEAL_TIMEOUT,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if done.returncode != 0:
+        return None
+    return [line for line in done.stdout.splitlines() if line.strip()]
+
+
+def _confinement(before: list[str] | None, after: list[str] | None) -> str:
+    """What the run did to what git can see, said in one paragraph."""
+    if before is None or after is None:
+        return (
+            "**Tracked files: not established.** `git status` could not be read "
+            "here, so this run's confinement rests on `--links-only` alone — it "
+            "plans the generated layer and reaches no planner that writes a "
+            "tracked file."
+        )
+    new = [line for line in after if line not in before]
+    if not new:
+        return (
+            "**No tracked file changed.** `--links-only` reaches no planner that "
+            "writes one, and `git status` read either side of the run is "
+            "unchanged."
+        )
+    listed = "\n".join(f"        {line}" for line in new)
+    return (
+        "**This repair left changes git can see** — which it should not, and "
+        "nothing here committed them:\n\n"
+        f"{listed}\n\n"
+        "    Review them before doing any work. If they are the generated links "
+        "themselves, this repo's `.gitignore` is missing the entries a full "
+        "`wire-repo.py update` writes."
+    )
+
+
+def heal(repo: Path, here: Path, out=None) -> None:
+    """Restore the generated layer where the ruling's precondition holds.
+
+    Prints what it did — or why it did nothing — and returns. It never raises
+    and never blocks: whatever happens here, the page still renders after it.
+    """
+    out = out or sys.stdout
+    faults = _generated_layer_faults(repo)
+    if not faults:
+        return
+    what = "; ".join(faults)
+
+    blocked = _heal_blocked(repo, here)
+    clone = _resolve_clone(repo)
+    if blocked is None and clone is None:
+        blocked = "no teomach-skills clone resolves from here, so there is nothing to rewire from"
+    if blocked is not None:
+        out.write(
+            f"**Self-heal not run.** The generated layer is incomplete "
+            f"({what}) and this session did not repair it: {blocked}. Nothing "
+            f"was written.\n\n"
+        )
+        return
+
+    command = [
+        sys.executable, str(clone / "scripts" / "wire-repo.py"),
+        "update", "--repo", str(repo), "--links-only",
+    ]
+    shown = "    " + " ".join(command)
+    before = _git_status(repo)
+    try:
+        done = subprocess.run(
+            command, capture_output=True, text=True, timeout=HEAL_TIMEOUT
+        )
+    except subprocess.TimeoutExpired:
+        out.write(
+            f"**Self-heal timed out** after {HEAL_TIMEOUT}s and was killed. The "
+            f"generated layer may be half restored; run it yourself and read "
+            f"what it says:\n\n{shown}\n\n"
+        )
+        return
+    except OSError as exc:
+        out.write(f"**Self-heal could not run** ({exc}):\n\n{shown}\n\n")
+        return
+    after = _git_status(repo)
+
+    output = (done.stdout + done.stderr).strip()
+    quoted = "\n".join(f"    {line}" for line in output.splitlines())
+    if done.returncode != 0:
+        # One cause is worth naming rather than leaving as an argparse dump,
+        # because it is the ordinary state during a roll and reads as a bug:
+        # the repair runs the installer in the clone THIS MACHINE installs
+        # from, and a repo can be wired at a version that clone does not carry
+        # yet. `test-orient.py` seeds an installer that refuses the flag.
+        cause = ""
+        if "--links-only" in output and "unrecognized arguments" in output:
+            cause = (
+                f"\n\nThat clone is older than this repo's wiring: it has no "
+                f"`--links-only`. The repair runs the installer where the "
+                f"machine's skills are installed from, so update that clone "
+                f"(`git pull` in {clone}, then its `scripts/install-skills.sh`) "
+                f"and the next session start repairs itself."
+            )
+        out.write(
+            f"**Self-heal refused** (exit {done.returncode}). The generated "
+            f"layer is still incomplete ({what}), and what the installer said "
+            f"is the whole of why:\n\n{quoted}{cause}\n\n"
+            f"{_confinement(before, after)}\n\n"
+        )
+        return
+
+    remaining = _generated_layer_faults(repo)
+    headline = (
+        "**Self-healed at session start.**" if not remaining
+        else "**Self-heal ran and did not finish the job.**"
+    )
+    out.write(
+        f"{headline} This repo is wired and its guard set is current, and its "
+        f"generated layer — `.claude/skills/` and `{METHOD_LINK}`, materialised "
+        f"against this machine's install and gitignored, so neither travels in a "
+        f"clone — was incomplete: {what}. This hook therefore ran the repair "
+        f"itself rather than printing the command for someone to run "
+        f"(teomach-cockpit#226):\n\n{shown}\n\n{quoted}\n\n"
+        f"{_confinement(before, after)}\n\n"
+    )
+    if remaining:
+        out.write(
+            f"**Still incomplete after the repair:** {'; '.join(remaining)}. Tell "
+            f"the human; the orientation below is what this state renders.\n\n"
+        )
+        return
+    out.write(
+        "The page below is the repaired repo's. The skill **listing** this "
+        "session already loaded is not: a skill linked a moment ago is readable "
+        f"at `.claude/skills/<name>/SKILL.md` and followable from there, and "
+        "becomes invocable at the next session start.\n\n"
+    )
+
+
 def refusal_text(message: str) -> str:
     return (
         "# Orientation unavailable — this repo cannot be oriented\n\n"
@@ -776,9 +1028,32 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--repo", default=".", help="the repo root to orient (default: .)")
     parser.add_argument("--profiles", default=None, help="directory holding <type>.yml")
+    parser.add_argument(
+        "--heal", action="store_true",
+        help="restore the generated layer first where this repo is otherwise "
+             "wired, and report what changed (the SessionStart hook passes it)",
+    )
     args = parser.parse_args(argv)
 
     profiles = Path(args.profiles) if args.profiles else None
+    if args.heal:
+        # Before `load`, not after: with no `.claude/skills/` there is no
+        # anchor to resolve the manifests through, so an unrepaired fresh clone
+        # refuses here and gets no page at all. Repairing first is what turns
+        # that refusal into an orientation.
+        #
+        # Broad, and deliberately: a repair that raises must cost this session
+        # its repair, never its page. The message says which happened, because
+        # a page rendered over a crash nobody was told about is the silence
+        # this whole path exists to end.
+        try:
+            heal(Path(args.repo), Path(__file__).resolve().parent)
+        except Exception as exc:  # noqa: BLE001 — see above
+            sys.stdout.write(
+                f"**Self-heal errored** ({exc.__class__.__name__}: {exc}) and "
+                f"wrote nothing further. What follows is the unrepaired repo's "
+                f"orientation.\n\n"
+            )
     try:
         config, manifest, _ = load(Path(args.repo), profiles)
         sys.stdout.write(render(config, manifest, Path(args.repo)))

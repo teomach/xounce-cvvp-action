@@ -30,6 +30,14 @@ a PR body is staged for `gh --body-file`, and the cross-flight notes folder,
 which `method/references/cross-flight-notes.md` says can be deleted without
 loss. An issue number in either is functional — it is what the file is for.
 
+**The memory store is the routing guard's room.** On every save there,
+`post-write-memory-routing.py` mandates that a routed memory be rewritten as a
+pointer to its owning-repo issue — the functional-pointer kind
+`history-in-git.md` sanctions — and that pointer is exactly the shape the
+narration pattern reads as history. One guard mandating what the other scolds
+is what teaches a session to skim both, so this guard says nothing in that
+store and leaves every question a memory raises to the guard that owns it.
+
 **When it cannot find the lint it says so and passes.** A skipped check that
 prints nothing reads as a clean one.
 """
@@ -97,6 +105,46 @@ def is_ephemeral(target: Path, session_id: str) -> bool:
         return False
     parts = set().union(*(set(c.parts) for c in candidates))
     return "scratchpad" in parts or bool(session_id and session_id in parts)
+
+
+def in_memory_store(target: Path, repo: Path) -> bool:
+    """True when this path is in a project's memory store — the routing
+    guard's room, where this guard stays out (see the docstring).
+
+    Same two shapes as that guard's `in_memory_dir()`: `memory/` with
+    `.claude` somewhere above it, or `memory/` at the root of the repo.
+    Duplicated rather than imported because each guard ships standalone into
+    a wired repo's `.claude/hooks/`; the shared-module dedupe is filed and
+    rides its own seal.
+
+    Both spellings of both sides are compared, because a machine whose /home
+    is a symlink to /var/home would otherwise compare one directory with
+    itself and disagree.
+    """
+    try:
+        candidates = [target.absolute(), target.resolve()]
+    except OSError:
+        candidates = [target.absolute()]
+
+    for here in candidates:
+        parts = here.parts
+        for i, part in enumerate(parts[:-1]):        # [:-1] — the file is not a dir
+            if part != "memory":
+                continue
+            if ".claude" in parts[:i]:
+                return True
+        for base in (repo.absolute(), repo):
+            try:
+                base = base.resolve()
+            except OSError:
+                pass
+            try:
+                rel = here.relative_to(base)
+            except ValueError:
+                continue
+            if rel.parts and rel.parts[0] == "memory" and len(rel.parts) > 1:
+                return True
+    return False
 
 
 def repo_root(cwd: str) -> Path:
@@ -187,6 +235,11 @@ def main() -> None:
         sys.exit(0)
 
     repo = repo_root(payload.get("cwd") or "")
+    try:
+        if in_memory_store(target, repo):
+            sys.exit(0)
+    except OSError:
+        pass
     lint_path = find_lint(repo)
     if lint_path is None:
         skip(

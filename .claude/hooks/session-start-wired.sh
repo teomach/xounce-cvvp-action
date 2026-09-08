@@ -36,6 +36,18 @@ REPO="$(repo_root "$(json_str cwd)")"
 problems=()
 add() { problems+=("$1"); }
 
+# THE GENERATED LAYER, kept apart from `problems` for the whole length of this
+# hook. `.claude/skills/` and `.claude/method` are materialised against this
+# machine's install and gitignored, so they travel in no clone and survive no
+# merge. Their absence is therefore not the same fault as a broken guard: the
+# repo is wired, and one thing that was never committed is not here yet. Two
+# consequences, and the branch that emits each is marked with this name rather
+# than arguing the point again — it is the one state this hook may report
+# calmly, and the one the method repairs rather than reports (the orientation
+# hook does it, `orient/README.md` §The self-heal).
+generated=()
+missing_layer() { generated+=("$1"); }
+
 # --- wired at all, and at which version -------------------------------------
 declared=""
 if [ ! -f "$REPO/.teomach.yml" ]; then
@@ -85,8 +97,11 @@ fi
 # The resident set declares packs and links them; it does not vendor them. So a
 # machine without the skills clone gets dangling links, and the whole method is
 # quietly absent. Say so, with the command that fixes it.
+#
+# Absent and dangling part company here: only the first is THE GENERATED LAYER
+# above, and why the second is not is `orient/README.md` §The self-heal's.
 if [ ! -d "$REPO/.claude/skills" ]; then
-    add "no .claude/skills/ — this session has the kernel and this repo's packs nowhere."
+    missing_layer "no .claude/skills/ — this session has the kernel and this repo's packs nowhere."
 else
     dangling=()
     for e in "$REPO"/.claude/skills/*; do
@@ -97,9 +112,15 @@ else
     if [ "${#dangling[@]}" -gt 0 ]; then
         add "${#dangling[@]} skill link(s) point at nothing on this machine (${dangling[*]}) — run scripts/install-skills.sh from a teomach-skills clone."
     elif [ -z "$(ls -A "$REPO/.claude/skills" 2>/dev/null)" ]; then
-        add ".claude/skills/ is empty — no kernel, no packs, no method."
+        missing_layer ".claude/skills/ is empty — no kernel, no packs, no method."
     fi
 fi
+
+# The other half of that layer: the one terminal symlink the orientation and
+# the shipped checks cite their standing pages through. `-e` follows it, so a
+# link pointing at nothing counts as absent, which is what it is worth.
+[ -e "$REPO/.claude/method" ] || \
+    missing_layer "no .claude/method — the standing rules and the model ladder are cited through it and do not open."
 
 # --- can the shell guards read their own payload? ---------------------------
 [ -n "$(json_reader)" ] || add "neither jq nor python3 is on PATH — every guard that reads the tool payload will fail open silently."
@@ -109,23 +130,71 @@ fi
 # gets the refusal rather than a broken hook.
 esc() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | awk '{printf "%s\\n", $0}'; }
 
-if [ "${#problems[@]}" -eq 0 ]; then
-    ctx="Teòmach guards v$installed are installed, dispatched and current in this repo: Bash calls are checked for global installs, writes outside the tree, and sweep staging (\`git add -A\`/\`git commit -a\` — stage by path), \`gh pr create\` for a judge report standing for this branch at HEAD, Agent calls for lane-shaped dispatches (lanes fly as \`wingman\` tabs), cockpit edits under the repo's declared build paths for a routing declaration (build work flies as a lane; straight-through is declared, not asked), markdown edits for decision narration, memory writes for the routing question (does this fact belong in a channel?), and the end of each turn for uncommitted work and untallied build-path changes."
+GUARDS_LIVE="Teòmach guards v$installed are installed, dispatched and current in this repo: Bash calls are checked for global installs, writes outside the tree, and sweep staging (\`git add -A\`/\`git commit -a\` — stage by path), \`gh pr create\` for a judge report standing for this branch at HEAD, Agent calls for lane-shaped dispatches (lanes fly as \`wingman\` tabs), cockpit edits under the repo's declared build paths for a routing declaration (build work flies as a lane; straight-through is declared, not asked), markdown edits for decision narration, memory writes for the routing question (does this fact belong in a channel?), and the end of each turn for uncommitted work and untallied build-path changes."
+
+# --- where a rewire would come from -----------------------------------------
+# The machine's own install anchors the method clone: `setup` is the kernel
+# skill every bundle links, and resolving it physically walks into the clone
+# that carries the installer. Resolved here rather than inside one branch,
+# because both the refusal below and the generated-layer notice name it.
+# `orient.py:_install_dir` is the other half of this one rule, in the language
+# the repair is written in; move either and move both.
+install_dir="${TEOMACH_SKILLS_DIR:-$HOME/.claude/skills}"
+clone="$(cd -P "$install_dir/setup/../.." 2>/dev/null && pwd)"
+if [ -n "$clone" ] && [ -f "$clone/scripts/wire-repo.py" ]; then
+    command_line="python3 \"$clone/scripts/wire-repo.py\" update --repo \"$REPO\""
+else
+    # Named as a placeholder rather than resolved wrongly: this machine has no
+    # install to rewire from, and a command with an empty path in it is worse
+    # than one that says so.
+    command_line="python3 <teomach-skills clone>/scripts/wire-repo.py update --repo \"$REPO\""
+fi
+
+# --- wired, current, and only THE GENERATED LAYER absent --------------------
+# Both consequences named above, in the branch that emits them. What is added
+# here is one fact about the second: this hook does not perform the repair and
+# does not wait for it — Claude Code runs an event's hooks CONCURRENTLY — so
+# this text is written while that repair is still going, and points at its
+# report rather than claiming an outcome it cannot have seen.
+if [ "${#problems[@]}" -eq 0 ] && [ "${#generated[@]}" -gt 0 ]; then
+    layer=""
+    for p in "${generated[@]}"; do layer="$layer  · $p
+"; done
+    ctx="This repo's GENERATED wiring layer was incomplete when this session started:
+
+$layer
+That layer — .claude/skills/ and .claude/method — is materialised against this
+machine's install and gitignored, so it travels in no clone and survives no
+merge. Nothing is broken: $GUARDS_LIVE
+
+The orientation hook restores it at session start and reports what it changed.
+Both SessionStart hooks run at once, so this line was written before that
+repair finished — its report, above or below this one, is what actually
+happened. If it says the repair did not run, this is the command:
+
+    $command_line"
     printf '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"%s"}}\n' "$(esc "$ctx")"
     exit 0
 fi
 
+# Everything else the layer is missing is listed with the rest: where a guard
+# is stale or absent, the whole resident set is behind and one command fixes
+# all of it.
+# Appended under a count test: expanding an empty array is not portable enough
+# to do under `set -u` on every bash a colleague's laptop might carry.
+if [ "${#generated[@]}" -gt 0 ]; then problems+=("${generated[@]}"); fi
+
+if [ "${#problems[@]}" -eq 0 ]; then
+    printf '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"%s"}}\n' "$(esc "$GUARDS_LIVE")"
+    exit 0
+fi
+
 # --- the single command that fixes it ---------------------------------------
-# A fresh clone or a post-merge checkout is unwired BY DESIGN: .claude/skills/
-# is generated into the machine's install and gitignored, so it never travels.
-# The spec's answer (2026-08-06-repo-wiring.md §5) is that this guard prints
-# the single command that rewires the repo — told, not silently degraded, and
-# never self-healed: a guard only reads and refuses (§10). The machine's own
-# install anchors the method clone: `setup` is the kernel skill every bundle
-# links, and resolving it physically walks into the clone that carries the
-# installer.
-install_dir="${TEOMACH_SKILLS_DIR:-$HOME/.claude/skills}"
-clone="$(cd -P "$install_dir/setup/../.." 2>/dev/null && pwd)"
+# The spec's answer for a repo the method does not find in order
+# (2026-08-06-repo-wiring.md §5): this guard prints the single command that
+# rewires it — told, not silently degraded. This guard still only reads and
+# refuses (§10), and every repair there is happens in the branch above and
+# never in this one.
 if [ -n "$clone" ] && [ -f "$clone/scripts/wire-repo.py" ]; then
     remedy="  1. Tell the human what is listed above.
   2. Run the one command that rewires this repo:
