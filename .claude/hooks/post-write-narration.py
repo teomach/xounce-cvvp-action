@@ -47,9 +47,20 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
-import subprocess
 import sys
 from pathlib import Path
+
+sys.dont_write_bytecode = True      # no __pycache__ inside the repo it guards
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+try:
+    from _target import in_memory_store, introduced_text, repo_root
+except ImportError as exc:          # an install older than guard set v17
+    print(
+        "narration guard SKIPPED, not passed: _target.py is not beside it "
+        f"({exc}). Re-run `scripts/wire-repo.py update` from a teomach-skills clone.",
+        file=sys.stderr,
+    )
+    sys.exit(0)
 
 # Files whose job IS history, per history-in-git.md §Where history does belong.
 EXEMPT_NAMES = {"README.md", "CHANGELOG.md", "IMPROVEMENTS.md", "ROADMAP.md"}
@@ -107,62 +118,6 @@ def is_ephemeral(target: Path, session_id: str) -> bool:
     return "scratchpad" in parts or bool(session_id and session_id in parts)
 
 
-def in_memory_store(target: Path, repo: Path) -> bool:
-    """True when this path is in a project's memory store — the routing
-    guard's room, where this guard stays out (see the docstring).
-
-    Same two shapes as that guard's `in_memory_dir()`: `memory/` with
-    `.claude` somewhere above it, or `memory/` at the root of the repo.
-    Duplicated rather than imported because each guard ships standalone into
-    a wired repo's `.claude/hooks/`; the shared-module dedupe is filed and
-    rides its own seal.
-
-    Both spellings of both sides are compared, because a machine whose /home
-    is a symlink to /var/home would otherwise compare one directory with
-    itself and disagree.
-    """
-    try:
-        candidates = [target.absolute(), target.resolve()]
-    except OSError:
-        candidates = [target.absolute()]
-
-    for here in candidates:
-        parts = here.parts
-        for i, part in enumerate(parts[:-1]):        # [:-1] — the file is not a dir
-            if part != "memory":
-                continue
-            if ".claude" in parts[:i]:
-                return True
-        for base in (repo.absolute(), repo):
-            try:
-                base = base.resolve()
-            except OSError:
-                pass
-            try:
-                rel = here.relative_to(base)
-            except ValueError:
-                continue
-            if rel.parts and rel.parts[0] == "memory" and len(rel.parts) > 1:
-                return True
-    return False
-
-
-def repo_root(cwd: str) -> Path:
-    env = os.environ.get("CLAUDE_PROJECT_DIR")
-    if env and Path(env).is_dir():
-        return Path(env)
-    try:
-        top = subprocess.run(
-            ["git", "-C", cwd or ".", "rev-parse", "--show-toplevel"],
-            capture_output=True, text=True, timeout=5,
-        )
-        if top.returncode == 0 and top.stdout.strip():
-            return Path(top.stdout.strip())
-    except (OSError, subprocess.SubprocessError):
-        pass
-    return Path(cwd or ".")
-
-
 def find_lint(repo: Path) -> Path | None:
     """Locate the one copy of the heuristic.
 
@@ -197,9 +152,9 @@ def find_lint(repo: Path) -> Path | None:
 
 
 def load_lint(path: Path):
-    # A guard writes nothing outside the repo it is guarding, and the lint lives
-    # in the skills clone — so no __pycache__ beside it.
-    sys.dont_write_bytecode = True
+    # No __pycache__ beside the lint either: a guard writes nothing outside the
+    # repo it is guarding, and the lint lives in the skills clone. The flag is
+    # already set at the top of this file, for the import beside this one.
     spec = importlib.util.spec_from_file_location("teomach_lint_skills", path)
     if spec is None or spec.loader is None:
         return None
@@ -262,15 +217,7 @@ def main() -> None:
 
     # What this edit put on the page. Anything already in the file was somebody
     # else's decision and is the lint's business, not this edit's.
-    introduced = tool_input.get("content")
-    if introduced is None:
-        introduced = tool_input.get("new_string")
-    if introduced is None:
-        edits = tool_input.get("edits")
-        if isinstance(edits, list):
-            introduced = "\n".join(
-                e.get("new_string", "") for e in edits if isinstance(e, dict)
-            )
+    introduced = introduced_text(tool_input)
 
     masked = mask(text)
     hits = []

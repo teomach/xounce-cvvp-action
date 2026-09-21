@@ -59,11 +59,22 @@ cannot resolve.
 from __future__ import annotations
 
 import json
-import os
 import re
 import sys
 from datetime import date, timedelta
 from pathlib import Path
+
+sys.dont_write_bytecode = True      # no __pycache__ inside the repo it guards
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+try:
+    from _target import in_memory_store, introduced_text, repo_root
+except ImportError as exc:          # an install older than guard set v17
+    print(
+        "memory-routing guard SKIPPED, not passed: _target.py is not beside it "
+        f"({exc}). Re-run `scripts/wire-repo.py update` from a teomach-skills clone.",
+        file=sys.stderr,
+    )
+    sys.exit(0)
 
 # The index, not a fact. One line per memory, written beside the file this
 # guard does fire on.
@@ -103,7 +114,7 @@ ARTEFACT = re.compile(POINTER.pattern + r"|https?://\S*/pull/\d+")
 WINDOW = 160
 
 
-def uncited_claims(text: str, introduced: str) -> list[tuple[int, str]]:
+def uncited_claims(text: str, introduced: str | None) -> list[tuple[int, str]]:
     """Claims of a human decision with no artefact within WINDOW characters.
 
     Proximity is the substance: a whole-file pointer test was measured letting
@@ -113,59 +124,13 @@ def uncited_claims(text: str, introduced: str) -> list[tuple[int, str]]:
     """
     hits = []
     for m in CLAIM.finditer(text):
-        if introduced and m.group(0) not in introduced:
+        if introduced is not None and m.group(0) not in introduced:
             continue
         window = text[max(0, m.start() - WINDOW): m.end() + WINDOW]
         if ARTEFACT.search(window):
             continue
         hits.append((text[: m.start()].count("\n") + 1, m.group(0)))
     return hits
-
-
-def repo_root(cwd: str) -> Path:
-    env = os.environ.get("CLAUDE_PROJECT_DIR")
-    if env and Path(env).is_dir():
-        return Path(env)
-    return Path(cwd or ".")
-
-
-def in_memory_dir(target: Path, repo: Path) -> bool:
-    """True when this path is a fact in a project's memory store.
-
-    Two shapes, because the store sits in two places. The per-project store a
-    session harness hands out lives under a `.claude/` tree — `memory/` with
-    `.claude` somewhere above it — and a repo that keeps its own puts it at the
-    root of the tree. A `memory/` anywhere else (a `src/memory/` of source
-    files, say) is somebody's code and none of this guard's business.
-
-    Both spellings of both sides are compared, because a machine whose /home is
-    a symlink to /var/home would otherwise compare one directory with itself
-    and disagree.
-    """
-    try:
-        candidates = [target.absolute(), target.resolve()]
-    except OSError:
-        candidates = [target.absolute()]
-
-    for here in candidates:
-        parts = here.parts
-        for i, part in enumerate(parts[:-1]):        # [:-1] — the file is not a dir
-            if part != "memory":
-                continue
-            if ".claude" in parts[:i]:
-                return True
-        for base in (repo.absolute(), repo):
-            try:
-                base = base.resolve()
-            except OSError:
-                pass
-            try:
-                rel = here.relative_to(base)
-            except ValueError:
-                continue
-            if rel.parts and rel.parts[0] == "memory" and len(rel.parts) > 1:
-                return True
-    return False
 
 
 def sweep_nudge(target: Path) -> list[str]:
@@ -207,20 +172,6 @@ def sweep_nudge(target: Path) -> list[str]:
     return []
 
 
-def introduced_text(tool_input: dict) -> str:
-    """What this call put on the page, whichever edit shape carried it."""
-    for key in ("content", "new_string"):
-        value = tool_input.get(key)
-        if isinstance(value, str):
-            return value
-    edits = tool_input.get("edits")
-    if isinstance(edits, list):
-        return "\n".join(
-            e.get("new_string", "") for e in edits if isinstance(e, dict)
-        )
-    return ""
-
-
 def main() -> None:
     try:
         payload = json.load(sys.stdin)
@@ -240,7 +191,7 @@ def main() -> None:
 
     repo = repo_root(payload.get("cwd") or "")
     try:
-        if not in_memory_dir(target, repo):
+        if not in_memory_store(target, repo):
             sys.exit(0)
     except OSError:
         sys.exit(0)
@@ -251,7 +202,7 @@ def main() -> None:
     try:
         text = target.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
-        text = introduced_text(tool_input)
+        text = introduced_text(tool_input) or ""
 
     # The two questions this guard asks, each with its own silence. The
     # routing question skips the index and falls silent once any pointer is in

@@ -89,10 +89,22 @@ refuse() {   # refuse <headline> <what-to-do-instead...>
     exit 2
 }
 
+# One wrapping quote pair off a word, left in UNQUOTED. A path operand and a
+# command word are both written with them, so the stripping is one idiom and
+# not two that drift. It assigns where the rest of this file prints, because
+# this guard runs on every Bash call and the subshell a `$(unquote …)` costs
+# was measured at 4 ms of a 36 ms run, several operands at a time.
+UNQUOTED=""
+unquote() {   # unquote <word> — the word, one quote pair off, in UNQUOTED
+    UNQUOTED="$1"
+    UNQUOTED="${UNQUOTED%\"}"; UNQUOTED="${UNQUOTED#\"}"
+    UNQUOTED="${UNQUOTED%\'}"; UNQUOTED="${UNQUOTED#\'}"
+}
+
 # A path this repo's work may write to. Anything else absolute is outside.
 inside() {
-    local p="$1" notes
-    p="${p%\"}"; p="${p#\"}"; p="${p%\'}"; p="${p#\'}"
+    local p notes
+    unquote "$1"; p="$UNQUOTED"
     # The patterns below are literal text in someone else's command string, not
     # paths for this shell to expand — hence the quoting shellcheck warns about.
     # shellcheck disable=SC2088,SC2016
@@ -130,30 +142,114 @@ demask() {
     printf '%s' "$s"
 }
 
+# One command per segment: splitting on the separators puts the command word
+# first, which is what makes "at a command position" a lookup rather than a
+# regex nobody can read. Both scans below take their segments from here, so
+# the runner test and the verb scan cannot drift apart about where a command
+# begins.
+segments() {   # segments <text> — one segment per line
+    printf '%s\n' "$1" | awk '{ gsub(/&&|\|\||\||;/, "\n"); print }'
+}
+
+# A word that hands its arguments to a command rather than being one. Each
+# takes its own flags first, and the timers and schedulers take a duration or
+# a niceness after them — never a verb, no command being spelled as a bare
+# number. `time` sits here too, which is what reads `time -p dnf install jq`
+# as a `dnf`.
+is_wrapper() {   # is_wrapper <word>
+    case "$1" in
+      time|exec|command|builtin|nohup|env|nice|timeout|stdbuf|setsid|ionice|xargs)
+        return 0 ;;
+    esac
+    return 1
+}
+
+# The command word of a segment, left in WORDS with its arguments after it —
+# a caller reads the verb as "${WORDS[0]}" and its operands as
+# "${WORDS[@]:1}". Returns 1 when the segment holds no command word at all.
+# OPENERS counts the `(`/`{` stripped and SUBSHELLS the `(` alone, so a caller
+# can tell a scope that ends from one that does not; STRIPPED holds the
+# wrappers stepped over, which are still command words for `shell_runner`.
+#
+# WHAT STANDS IN FRONT OF A COMMAND WORD WITHOUT BEING ONE, each measured
+# (teomach-skills#481): the leading `VAR=value` assignments the split leaves
+# in place, a subshell or group opening (`(`, `{`), a negation (`!`), a
+# backslash escaping an alias, and the wrappers above. Read with any of them
+# left on, `(bash -c '…')` is the word `(bash`, which matches no runner — so
+# the masking below stayed ON over a real write — and `(sudo dnf install jq)`,
+# `exec sudo …` and `nice -n 10 dnf install jq` reached no refusal at all.
+#
+# The word is unquoted, so `"sudo"` is `sudo`, and basenamed ONLY where it is
+# spelled absolutely, so `/usr/bin/pip` is `pip`. A relative spelling is left
+# whole: `.venv/bin/pip` is the project-local environment the `pip` refusal
+# below points the reader at, and basenaming it would refuse this guard's own
+# remedy.
+command_word() {   # command_word <segment>
+    # shellcheck disable=SC2206   # deliberate: split the segment into words
+    WORDS=($1)
+    OPENERS=0; SUBSHELLS=0; STRIPPED=()
+    local w
+    while [ "${#WORDS[@]}" -gt 0 ]; do
+        w="${WORDS[0]}"
+        while [ -n "$w" ]; do
+            case "$w" in
+              '('*) OPENERS=$((OPENERS + 1)); SUBSHELLS=$((SUBSHELLS + 1)); w="${w#?}" ;;
+              '{'*) OPENERS=$((OPENERS + 1)); w="${w#?}" ;;
+              '!'*) w="${w#?}" ;;
+              *)    break ;;
+            esac
+        done
+        w="${w#\\}"
+        if [ -z "$w" ] || [[ "$w" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; then
+            WORDS=("${WORDS[@]:1}"); continue
+        fi
+        unquote "$w"; w="$UNQUOTED"
+        # Literal text in someone else's command string, not paths for this
+        # shell to expand — the same quoting `inside()` carries, for the same
+        # reason.
+        # shellcheck disable=SC2088,SC2016
+        case "$w" in
+          /*|"~/"*|'$HOME/'*|'${HOME}/'*) w="${w##*/}" ;;
+        esac
+        if is_wrapper "$w"; then
+            STRIPPED+=("$w")
+            WORDS=("${WORDS[@]:1}")
+            while [ "${#WORDS[@]}" -gt 0 ]; do
+                if [ "${WORDS[0]:0:1}" = "-" ] ||
+                   [[ "${WORDS[0]}" =~ ^[0-9]+([.][0-9]+)?[smhd]?$ ]]; then
+                    WORDS=("${WORDS[@]:1}")
+                else
+                    break
+                fi
+            done
+            continue
+        fi
+        WORDS[0]="$w"
+        return 0
+    done
+    return 1
+}
+
 # 0 when any command word in <text> hands a string to another shell, which is
 # what switches the masking off. The list is the runners a session actually
 # reaches for, plus the elevations — `sudo bash -c` must keep reaching the
-# elevation refusal below whatever its argument is quoted like. A word is
-# taken at a command position only: the segment's first, after the leading
-# `VAR=value` assignments the split leaves in front of it, and basenamed so
-# that `/usr/bin/bash` is `bash`.
+# elevation refusal below whatever its argument is quoted like.
 shell_runner() {
     local seg w
     while IFS= read -r seg; do
-        # shellcheck disable=SC2206   # deliberate: split the segment into words
-        local ws=($seg)
-        while [ "${#ws[@]}" -gt 0 ] && [[ "${ws[0]}" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; do
-            ws=("${ws[@]:1}")
+        command_word "$seg" || continue
+        # The wrappers `command_word` stepped over are command words here:
+        # `timeout 5 bash -c …` hands a string to a shell whichever of the two
+        # the verb scan reads as its verb.
+        for w in ${STRIPPED[@]+"${STRIPPED[@]}"} "${WORDS[0]}"; do
+            case "$w" in
+              sh|bash|dash|zsh|ksh|fish|eval|exec|source|.|env|nohup|timeout|watch|xargs|\
+              ssh|su|sudo|doas|pkexec|run0|podman|docker|nsenter|chroot|flatpak-spawn|\
+              toolbox|distrobox)
+                return 0 ;;
+            esac
         done
-        w="${ws[0]:-}"; w="${w##*/}"
-        w="${w%\"}"; w="${w#\"}"; w="${w%\'}"; w="${w#\'}"
-        case "$w" in
-          sh|bash|dash|zsh|ksh|fish|eval|exec|source|.|env|nohup|timeout|watch|xargs|\
-          ssh|su|sudo|doas|pkexec|podman|docker|nsenter|chroot|flatpak-spawn|\
-          toolbox|distrobox)
-            return 0 ;;
-        esac
-    done < <(printf '%s\n' "$1" | awk '{ gsub(/&&|\|\||\||;/, "\n"); print }')
+    done < <(segments "$1")
     return 1
 }
 
@@ -221,6 +317,22 @@ CMD="$(printf '%s\n' "$CMD" | awk '
         }
         print
     }
+')"
+
+# A `\` ending a line continues the command onto the next, so the two are one
+# line of command text and not two. Both scans read a line at a time, and left
+# unjoined the verb sits on one line and its operand on the next, where no
+# verb governs it — `touch \` then `/etc/motd` was allowed, and a redirection
+# split the same way took the backslash as its target. Joined here, after the
+# heredoc bodies are gone (so a `\` ending a line of prose is not a
+# continuation of anything) and before the masking walks the quoting.
+CMD="$(printf '%s\n' "$CMD" | awk '
+    {
+        line = (cont ? line $0 : $0)
+        if (line ~ /\\$/) { sub(/\\$/, " ", line); cont = 1; next }
+        cont = 0; print line
+    }
+    END { if (cont) print line }
 ')"
 
 # A quoted argument is DATA, not command text. The guard reads the command AS
@@ -302,27 +414,55 @@ done < <(printf '%s\n' "$CMD" |
          grep -oE '>>?[[:space:]]*[^[:space:]<>|&;()]+' |
          sed -E 's/^>>?[[:space:]]*//')
 
-# One segment per command: splitting on the separators puts the command word
-# first, which is what makes "at a command position" a lookup rather than a
-# regex nobody can read.
-cd_outside=""
+# A `cd` out of the tree belongs to the shell that ran it. `(cd /etc)` is a
+# SUBSHELL: it ends, and the parent never moved — measured allowed on the
+# guard before this scan read `(cd` as a `cd` at all. `{ cd /etc ; }` is a
+# group in the same shell, so its `cd` does carry. Hence two counts: how many
+# openings the command-word reader has stripped and not yet seen closed (the
+# budget a trailing closer may spend), and how many of those are subshells
+# (the scope a `cd` is remembered within).
+cd_outside=""; cd_scope=0; open_depth=0; sub_depth=0
+leave_closed_scopes() {
+    [ -n "$cd_outside" ] && [ "$sub_depth" -lt "$cd_scope" ] && cd_outside=""
+    return 0
+}
 while IFS= read -r seg; do
-    [ -n "${seg// /}" ] || continue
-    # shellcheck disable=SC2206   # deliberate: split the segment into words
-    words=($seg)
-    while [ "${#words[@]}" -gt 0 ] && [[ "${words[0]}" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; do
-        words=("${words[@]:1}")
+    command_word "$seg" || {
+        open_depth=$((open_depth + OPENERS)); sub_depth=$((sub_depth + SUBSHELLS))
+        leave_closed_scopes; continue; }
+
+    # A `)` or `}` ending the segment closes an opening this scan stripped at
+    # a command position, and nothing else — so at most as many come off as
+    # stand open, and a path that genuinely ends in one keeps it.
+    # The scope this segment's own command runs IN — before any closer on it
+    # is spent, because a `cd` runs inside the subshell its line opened.
+    seg_scope=$((sub_depth + SUBSHELLS))
+    budget=$((open_depth + OPENERS)); closed=0; sub_closed=0
+    while [ "$closed" -lt "$budget" ] && [ "${#WORDS[@]}" -gt 0 ]; do
+        last=$(( ${#WORDS[@]} - 1 ))
+        case "${WORDS[$last]}" in
+          *')') sub_closed=$((sub_closed + 1)) ;;
+          *'}') : ;;
+          *)    break ;;
+        esac
+        closed=$((closed + 1))
+        trimmed="${WORDS[$last]%?}"
+        if [ -n "$trimmed" ]; then WORDS[$last]="$trimmed"
+        else WORDS=(${WORDS[@]+"${WORDS[@]:0:$last}"}); fi
     done
-    [ "${#words[@]}" -gt 0 ] || continue
-    verb="${words[0]}"
-    args=("${words[@]:1}")
+    open_depth=$((open_depth + OPENERS - closed))
+    sub_depth=$((sub_depth + SUBSHELLS - sub_closed))
+    [ "${#WORDS[@]}" -gt 0 ] || { leave_closed_scopes; continue; }
+
+    verb="${WORDS[0]}"
+    args=("${WORDS[@]:1}")
     bare=()
     for a in ${args[@]+"${args[@]}"}; do
         case "$a" in -*) ;; *) bare+=("$a") ;; esac
     done
 
     case "$verb" in
-      sudo|doas|pkexec)
+      sudo|doas|pkexec|su|run0)
         refuse "this asks for elevation (\`$verb\`), which changes the machine rather than the work" \
 "Nothing a session needs should outlive it on this machine. System packages" \
 "arrive by declared state, not by hand from inside a session." \
@@ -404,7 +544,9 @@ while IFS= read -r seg; do
         ;;
 
       cd)
-        [ -n "${bare[0]:-}" ] && ! inside "${bare[0]}" && cd_outside="${bare[0]}"
+        if [ -n "${bare[0]:-}" ] && ! inside "${bare[0]}"; then
+            cd_outside="${bare[0]}"; cd_scope="$seg_scope"
+        fi
         ;;
 
       cp|mv|install|rsync|ln)
@@ -477,6 +619,7 @@ while IFS= read -r seg; do
             ;;
         esac
     fi
-done < <(printf '%s\n' "$CMD" | awk '{ gsub(/&&|\|\||\||;/, "\n"); print }')
+    leave_closed_scopes
+done < <(segments "$CMD")
 
 exit 0
