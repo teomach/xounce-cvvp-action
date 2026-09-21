@@ -7,9 +7,9 @@ THE ROUTING RULE IS method/references/memory-routing.md — read it there. What
 this guard prints is that page rendered where it applies, because a guard runs
 on machines the method clone may not be reachable from and a citation nobody
 can open routes nothing; the advisory cites the page only when the routing
-question fired, since the claim clause below is this file's own statement and
-the advisory carries it whole. What this docstring covers is only what is this
-file's own: when it fires, when it goes quiet, and what it counts as a memory.
+question fired, and carries the claim clause whole — the page states that
+clause too, and this file is where it is rendered. What this docstring covers
+is only what is this file's own: when it fires, when it goes quiet, and what it counts as a memory.
 
 WHAT IT ADDS over the page is the moment. Routing a fact into a channel must
 not depend on anyone remembering to do it, so the question is asked at the

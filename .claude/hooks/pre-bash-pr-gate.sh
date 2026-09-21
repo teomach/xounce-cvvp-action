@@ -14,10 +14,33 @@
 #
 # WHAT IT CHECKS, exactly and only: that a judge report exists for the worktree
 # the PR will be opened from, and that it names this branch at this HEAD. The
-# report is where `wingman-judge` writes it — ${XDG_RUNTIME_DIR:-/tmp}/flight/
-# judge-<worktree-basename>.md, with `<!-- flight-judge branch=… sha=… -->` in
-# its header. That path and that header line are the contract with the runner;
-# this guard reads them and writes nothing.
+# report is where `wingman-judge` writes it — $FLIGHT_STATE/judge-<worktree-
+# basename>.md, with `<!-- flight-judge branch=… sha=… -->` in its header. That
+# path and that header line are the contract with the runner; this guard reads
+# them and writes nothing.
+#
+# WHERE THE REPORT IS, in three steps and for one reason each. The cockpit
+# keeps two directories and draws the line at what a reboot ought to destroy;
+# a report is something somebody paid for, so it lives in the DURABLE one,
+# ${XDG_STATE_HOME:-$HOME/.local/state}/teomach/flight. This guard reads
+# $FLIGHT_STATE when the environment carries one — flight.sh defaults that
+# variable with `:=`, so a value already set is the runner's own answer and
+# not something to override — else that durable default, and then, only when
+# no report for this worktree stands there, the PER-BOOT
+# ${XDG_RUNTIME_DIR:-/tmp}/flight, so a box whose cockpit predates the split
+# still opens its PRs. A gate reading any one of the three alone refuses
+# lanes whose judge has run clean, and a refused lane teaches itself the
+# workaround the next paragraph is about.
+#
+# IT RESOLVES THE REPORT ITSELF RATHER THAN ASKING ANYONE TO MOVE
+# $FLIGHT_STATE. The lane's dispatch record (`.cli-<worktree>`) lives beside
+# the report, so repointing that variable to satisfy a gate takes the judge's
+# coverage derivation and the lane's flight association with it: the run
+# cannot find the dispatch record, falls back to a default runner, and the
+# report quoted in the PR is the degraded one — bought at full price and
+# silently worth less. Copying a report between the two directories is the
+# same mistake in a different hand. Where this gate is wrong, the route is
+# the hatch below, with the reason typed into the transcript.
 #
 # THREE DECISIONS, all deliberate:
 #
@@ -67,8 +90,14 @@
 #     be. A `cd` in an earlier tool call leaves no evidence at all, and the
 #     refusal says so rather than guessing.
 #   · On the cockpit's own machine this and the machine-level hook both fire
-#     on the same command. They read the same report and reach the same
-#     answer; a doubled refusal is accepted noise, and each names itself.
+#     on the same command, and agree wherever the report is in the durable
+#     directory — which is where the runner writes it; a doubled refusal is
+#     accepted noise, and each names itself. On a report that is ONLY in the
+#     per-boot directory they part, measured: this guard's fallback accepts
+#     it, the machine hook reads the durable path alone and refuses. The
+#     stricter answer is the one that stands, because either refusal blocks
+#     the command — so the fallback buys a PR on a machine with no cockpit
+#     install, and not on one that has it.
 #
 # THE HATCH: FLIGHT_PR_UNJUDGED='<why>' gh pr create …  A reason is
 # compulsory, and it is read out of the command string rather than the
@@ -263,7 +292,11 @@ _effective_dir() {
 run_dir=$(_effective_dir)
 [[ -d "$run_dir" ]] || run_dir="${cwd:-.}"
 
-FLIGHT_STATE="${XDG_RUNTIME_DIR:-/tmp}/flight"
+# The durable directory, honoured from the environment when the runner set it,
+# and the per-boot one kept as a fallback — the header says why each step is
+# there and why neither is ever "fixed" by moving a file.
+FLIGHT_STATE="${FLIGHT_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/teomach/flight}"
+FLIGHT_STATE_PERBOOT="${XDG_RUNTIME_DIR:-/tmp}/flight"
 RUNNER_HOME="$HOME/.bashrc.d/flight.sh"
 
 runner_present() {
@@ -312,6 +345,12 @@ root=$(git -C "$run_dir" rev-parse --show-toplevel 2>/dev/null) || exit 0
 # the same worktree; it is in the report's own header, which the identity
 # check below reads.
 report="$FLIGHT_STATE/judge-$(basename "$root").md"
+# The per-boot location is read only when the durable one holds no report for
+# THIS worktree, so a leftover there can never shadow a current report.
+# Whichever one is found then faces the same identity check below: a fallback
+# that relaxed staleness would buy a PR with a report for another commit.
+perboot_report="$FLIGHT_STATE_PERBOOT/judge-$(basename "$root").md"
+if [[ ! -f "$report" && -f "$perboot_report" ]]; then report="$perboot_report"; fi
 branch=$(git -C "$root" branch --show-current 2>/dev/null)
 topic="${branch:-<topic>}"
 
@@ -348,16 +387,40 @@ if [[ ! -f "$report" ]]; then
         echo "BLOCKED: no judge report for this worktree, so this PR would carry"
         echo "no independence layer at all."
         echo
+        # BOTH PATHS IT LOOKED AT, in the order it looked. `report` is still
+        # the durable one here: the fallback only replaces it when a report
+        # is actually there, so reaching this block means neither existed.
         echo "Looked for: $report"
+        [[ "$perboot_report" != "$report" ]] &&
+            echo "      then: $perboot_report (per-boot)"
         echo "Which is:   $run_dir"
-        # SAY WHAT DOES EXIST. When the gate resolves the wrong worktree a
-        # refusal that names one absent path is unreadable — the report just
-        # run may be sitting beside it under another name. A leader driving
-        # several lanes hits this first.
-        if compgen -G "$FLIGHT_STATE/judge-*.md" >/dev/null 2>&1; then
-            echo
-            echo "Reports that DO exist:"
-            for f in "$FLIGHT_STATE"/judge-*.md; do echo "    $f"; done
+        # SAY WHAT DOES EXIST, AND SAY WHICH DIRECTORY EACH ONE IS IN. When
+        # the gate resolves the wrong worktree a refusal that names one absent
+        # path is unreadable — the report just run may be sitting beside it
+        # under another name. A leader driving several lanes hits this first.
+        # The headings carry the other half: an undifferentiated list drawn
+        # from two directories reads as one set, so a lane takes the per-boot
+        # leftovers for the canon and its own clean report for the odd one
+        # out.
+        dirs=("$FLIGHT_STATE")
+        [[ "$FLIGHT_STATE_PERBOOT" != "$FLIGHT_STATE" ]] && dirs+=("$FLIGHT_STATE_PERBOOT")
+        listed=0; listed_perboot=0
+        for d in "${dirs[@]}"; do
+            compgen -G "$d/judge-*.md" >/dev/null 2>&1 || continue
+            (( listed )) || { echo; echo "Reports that DO exist:"; }
+            listed=1
+            [[ "$d" == "$FLIGHT_STATE_PERBOOT" && "$d" != "$FLIGHT_STATE" ]] && listed_perboot=1
+            echo "  in $d:"
+            for f in "$d"/judge-*.md; do echo "    $(basename "$f")"; done
+        done
+        if (( listed )); then
+            if (( listed_perboot )); then
+                echo
+                echo "The ones under $FLIGHT_STATE_PERBOOT are in"
+                echo "the per-boot directory, which the cockpit does not write"
+                echo "reports to: their presence says nothing about where yours"
+                echo "should be."
+            fi
             echo
             echo "If you are driving another worktree from a leader session, put"
             echo "the 'cd' in this same command — the hook is told the session's"
