@@ -76,6 +76,7 @@ for g in "${GUARDS[@]}"; do
     fi
 done
 [ -f "$HOOKS_DIR/_payload.sh" ] || add "shared helper missing: .claude/hooks/_payload.sh (the shell guards cannot read their payload without it)."
+[ -f "$HOOKS_DIR/_target.py" ] || add "shared helper missing: .claude/hooks/_target.py (the post-write guards skip themselves without it)."
 
 SETTINGS="$REPO/.claude/settings.json"
 if [ ! -f "$SETTINGS" ]; then
