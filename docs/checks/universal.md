@@ -1,5 +1,19 @@
 # Does this diff do what it claims, at the bar for its kind?
 
+**Read the tree; never operate on it.** This check is a session whose working
+directory is the worktree it judges, and the repository behind that worktree
+is shared: other worktrees are open on it, and the stash list is one list for
+all of them. So every git verb this check reaches for is a reading one —
+`git log`, `git diff`, `git show`, `git status`, `git ls-files`,
+`git stash list`. Never `git stash pop`, `git stash apply`, `git checkout`,
+`git restore`, `git reset`, `git clean`, `git commit`, `git merge`,
+`git rebase`: a write here can take up work parked by a lane this check is
+not judging, and a file left conflicted can stop the lane's own hooks
+parsing, which costs it every command it runs afterwards. Build, test and
+lint commands are the point of the grant and stay welcome. Where deciding
+would need the tree to be different, the verdict is NOT-CHECKABLE naming what
+changing it would take; no mutation buys a verdict.
+
 The check every repo starts with, and often the only one it needs.
 
 **The standard is the PR's own stated intent.** What a verdict means, what a

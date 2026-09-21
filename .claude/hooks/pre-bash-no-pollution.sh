@@ -51,8 +51,11 @@
 #     a `cd` in an earlier tool call leaves no evidence at all. A `cd` to an
 #     outside absolute path in THIS command is caught, being the one case there
 #     is evidence for.
-#   · `>` inside a quoted string reads as a redirection. Over-refusing an `echo`
-#     is a nuisance; under-refusing a write is the failure worth having.
+#   · Quoting is read, but only as far as a balanced command goes. An operator
+#     inside a quoted argument is masked (see the block above the scans), so a
+#     `>` in a sentence is a `>`; an UNBALANCED quote leaves the walker in a
+#     quoted state to the end of the string and masks the rest of it. Bash
+#     will not run such a command either, so the string was never a write.
 #   · A heredoc's body is data and not command text, so it is stripped before
 #     the scans read it — the block above them says why. The cost is real and
 #     runs the other way: a multi-line `<<` that is a shift rather than a
@@ -117,9 +120,46 @@ inside() {
     return 1
 }
 
+# The five masked operators back to the characters they stand for. A refusal
+# names the path the way the command wrote it, sentinels and all being this
+# guard's own bookkeeping and no business of the message.
+demask() {
+    local s="$1"
+    s="${s//$'\001'/>}"; s="${s//$'\002'/<}"; s="${s//$'\003'/;}"
+    s="${s//$'\004'/|}"; s="${s//$'\005'/&}"
+    printf '%s' "$s"
+}
+
+# 0 when any command word in <text> hands a string to another shell, which is
+# what switches the masking off. The list is the runners a session actually
+# reaches for, plus the elevations — `sudo bash -c` must keep reaching the
+# elevation refusal below whatever its argument is quoted like. A word is
+# taken at a command position only: the segment's first, after the leading
+# `VAR=value` assignments the split leaves in front of it, and basenamed so
+# that `/usr/bin/bash` is `bash`.
+shell_runner() {
+    local seg w
+    while IFS= read -r seg; do
+        # shellcheck disable=SC2206   # deliberate: split the segment into words
+        local ws=($seg)
+        while [ "${#ws[@]}" -gt 0 ] && [[ "${ws[0]}" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; do
+            ws=("${ws[@]:1}")
+        done
+        w="${ws[0]:-}"; w="${w##*/}"
+        w="${w%\"}"; w="${w#\"}"; w="${w%\'}"; w="${w#\'}"
+        case "$w" in
+          sh|bash|dash|zsh|ksh|fish|eval|exec|source|.|env|nohup|timeout|watch|xargs|\
+          ssh|su|sudo|doas|pkexec|podman|docker|nsenter|chroot|flatpak-spawn|\
+          toolbox|distrobox)
+            return 0 ;;
+        esac
+    done < <(printf '%s\n' "$1" | awk '{ gsub(/&&|\|\||\||;/, "\n"); print }')
+    return 1
+}
+
 outside_write() {   # outside_write <path> <verb>
     inside "$1" && return 0
-    refuse "this writes outside the working tree — \`$2\` targeting $1" \
+    refuse "this writes outside the working tree — \`$2\` targeting $(demask "$1")" \
 "A session's deliverables are the repo it is in. Nothing it produces should" \
 "land where the next clone of this repo cannot see it, and nothing it needs" \
 "should be installed where the next job inherits it." \
@@ -182,6 +222,77 @@ CMD="$(printf '%s\n' "$CMD" | awk '
         print
     }
 ')"
+
+# A quoted argument is DATA, not command text. The guard reads the command AS
+# WRITTEN, so an operator inside a quoted string reads as the operator it looks
+# like unless something stops it. Three measured shapes, each a
+# `gh issue create --body '…'` describing this guard's own refusal back to it:
+#
+#   · `ran `cat > ~/Code/flight-logs/x.md` and it failed` — a redirection;
+#   · `offered /tmp -> ~/Code/flight-logs/x.md instead` — the `>` of an arrow,
+#     so the backticks are incidental: prose alone is enough;
+#   · `it failed; mkdir ~/Code/flight-logs was next` — the `;` splits the body
+#     and `mkdir` becomes the second command's verb.
+#
+# The third is the segment splitter and not the redirection scan, which is why
+# the masking has to serve both.
+#
+# So `> < ; | &` inside a single- or double-quoted region is replaced by a
+# sentinel before either scan reads $CMD. The five are kept distinct and put
+# back by `demask` for a refusal message, so a path that genuinely carries one
+# is still named the way it was written.
+#
+# WHAT IS NOT MASKED, and why refusing to mask it is the point: text a shell
+# will actually run. A backtick or `$(…)` substitution is live, and so is
+# every quoted string in a command that hands one to another shell —
+# `bash -c 'cat > /etc/motd'` is command text that merely looks quoted. There
+# is no reading the argument that tells them apart, so the masking is switched
+# off for the WHOLE command the moment any command word in it is a runner.
+# Over-refusing inside a `bash -c` is the nuisance that stays; under-refusing
+# a write is still the failure worth having. It is the same distinction the
+# `sed` case makes below: what a token IS beats what it looks like.
+MASKED="$(printf '%s\n' "$CMD" | awk '
+    BEGIN {
+        SQ = sprintf("%c", 39); DQ = sprintf("%c", 34); BQ = sprintf("%c", 96)
+        OPS = ">" "<" ";" "|" "&"
+        for (i = 1; i <= 5; i++) SENT[substr(OPS, i, 1)] = sprintf("%c", i)
+        depth = 0            # st[1..depth]: the quoting contexts still open
+    }
+    {
+        out = ""; i = 1; L = length($0)
+        while (i <= L) {
+            c = substr($0, i, 1)
+            top = (depth ? st[depth] : "OUT")
+            if (top == "SQ") {                       # nothing is special but the close
+                if (c == SQ) { depth--; out = out c }
+                else if (c in SENT) out = out SENT[c]
+                else out = out c
+                i++; continue
+            }
+            if (top == "DQ") {
+                if (c == "\\") { out = out substr($0, i, 2); i += 2; continue }
+                if (c == DQ)   { depth--; out = out c; i++; continue }
+                if (c == BQ)   { st[++depth] = "BQ"; out = out c; i++; continue }
+                if (c == "$" && substr($0, i + 1, 1) == "(") {
+                    st[++depth] = "SUB"; out = out "$("; i += 2; continue }
+                if (c in SENT) { out = out SENT[c]; i++; continue }
+                out = out c; i++; continue
+            }
+            # live — OUT, or inside a substitution, where operators are real
+            if (c == "\\") { out = out substr($0, i, 2); i += 2; continue }
+            if (c == SQ)   { st[++depth] = "SQ"; out = out c; i++; continue }
+            if (c == DQ)   { st[++depth] = "DQ"; out = out c; i++; continue }
+            if (c == BQ)   { if (top == "BQ") depth--; else st[++depth] = "BQ"
+                             out = out c; i++; continue }
+            if (c == "$" && substr($0, i + 1, 1) == "(") {
+                st[++depth] = "SUB"; out = out "$("; i += 2; continue }
+            if (c == ")" && top == "SUB") { depth--; out = out c; i++; continue }
+            out = out c; i++
+        }
+        print out
+    }
+')"
+shell_runner "$MASKED" || CMD="$MASKED"
 
 # Every redirection target in the command, whatever segment it sits in.
 while read -r t; do
@@ -356,7 +467,7 @@ while IFS= read -r seg; do
     if [ -n "$cd_outside" ]; then
         case "$verb" in
           cp|mv|install|rsync|ln|rm|rmdir|mkdir|touch|truncate|unlink|tee|dd|chmod|chown|chgrp)
-            refuse "this changes directory to $cd_outside and then writes (\`$verb\`)" \
+            refuse "this changes directory to $(demask "$cd_outside") and then writes (\`$verb\`)" \
 "Everything after that \`cd\` lands outside this repo, whether or not the paths" \
 "look relative." \
 "" \
