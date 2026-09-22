@@ -1,5 +1,5 @@
-<!-- Source: teomach-skills MODELS.md @ 0ded520 —
-     rendered at guard-set v17 by scripts/wire-repo.py; edit it at source and
+<!-- Source: teomach-skills MODELS.md @ 9e780ff —
+     rendered at guard-set v18 by scripts/wire-repo.py; edit it at source and
      re-run `scripts/wire-repo.py update`, never edit this copy. -->
 
 # Models — which tier runs which skill
@@ -51,8 +51,8 @@ measured further on purpose.
 | Templated work | Claude Sonnet at `high` | Terra at `high`; Gemini 3.8 Flash at `high` on opencode — use the free credits |
 | Coverage judge (in-family checklist) | Sonnet at `medium` | Terra at `medium`, then Kimi K3 at `low` |
 | Independence reviewer (cross-family packet) | Gemini 3.8 Flash at `high` | Kimi K3 at `low` on opencode |
-| Formation critics | Astra at `high` + Kimi K3 at `max` as third voice | Gemini 3.8 Flash at `high` |
-| Whole-repo audit / review (the seven cross-family disciplines) | Astra at `high`, Kimi K3 at `max` | Gemini 3.8 Flash at `high` |
+| Formation critics | Astra at `high` + Kimi K3 at `max` on the `claude` runtime as third voice (#476) | Gemini 3.8 Flash at `high` |
+| Whole-repo audit / review (the seven cross-family disciplines) | Astra at `high`, Kimi K3 at `max` on the `claude` runtime (#476) | Gemini 3.8 Flash at `high` |
 | **Deprecated from every row** | GLM 5.3, GLM 5.3 Flash, Gemini 3.1 Pro | — |
 
 **The reasons, one line each, as the ruling gives them (#476):** Kimi at
@@ -85,12 +85,11 @@ row says it holds no job.
   so TensorX's seat there is Kimi K3 at `low` as the third fallback, and
   Kimi K3 at `low` on opencode is the independence backup — at 15–30 cents a
   PR, and to **Kimi K3 as a situational third voice** in a formation beside
-  Fable and Astra, dispatched as a critic through opencode (where the
-  provider config's effort holds), not as a builder on the `claude` runtime
-  (where it reasons at maximum with no lever — cockpit B75). The
-  Mainstream-building row's backup names Kimi K3 at `max` on the `claude`
-  runtime, situational on cost: read it with §The TensorX family's per-lane
-  figure in hand, as the leader's deliberate exception and not a default.
+  Fable and Astra, dispatched as a critic on the `claude` runtime (#476) —
+  §The TensorX family below carries the reason. The Mainstream-building
+  row's backup names Kimi K3 at `max` on the same runtime, situational on
+  cost: read it with §The TensorX family's per-lane figure in hand, as the
+  leader's deliberate exception and not a default.
 
 **Constraints ride beside the tier, never inside it.** A constraint narrows
 which family may serve a tier; it is not a level of expertise, so it is
@@ -347,10 +346,13 @@ speaks, and an Anthropic-compatible `https://api.tensorx.ai`, which the
 `claude` runtime speaks. The ids below are written bare, as the `claude`
 runtime takes them; opencode takes the same id behind a `tensorx/` prefix.
 **The ruling (#476) confines TensorX to the judge's two layers and to Kimi K3
-as a situational third voice, and Kimi's seat is opencode's** — the runtime
-where the provider config's effort holds; on the `claude` runtime the effort
-field is not read (teomach-cockpit#288) and the model reasons at maximum with
-no lever (cockpit B75). The mapping and the rates are the ruling's own (#418,
+as a situational third voice; the judge seat is opencode's** — the runtime
+where the provider config's effort holds. The critic seat rides the `claude`
+runtime instead, where the effort field is not read (teomach-cockpit#288) and
+the model reasons at maximum with no lever (cockpit B75) — a critic's value
+is its full reasoning, so the missing lever costs nothing there (the ruling
+"Kimi K3 as a critic rides Claude Code" on teomach/teomach-skills#476). The
+mapping and the rates are the ruling's own (#418,
 measured 2026-09-18); the registry facts below were re-read on **2026-09-18**
 from opencode 1.18.30's cache (`~/.cache/opencode/models.json`), and the two
 GLM rows' rates come from **tensorx.ai/models as at 2026-09-18**, which is
@@ -358,7 +360,7 @@ where they are published.
 
 | Tier | TensorX id | Basis |
 |---|---|---|
-| **Fable** | `moonshotai/kimi-k3` | Ruling (#418): the forensic rung. Ruling (#476): the independence backup at `low` on opencode; the coverage judge's third fallback at `low`; the third-family formation critic and whole-repo audit voice at `max` on opencode; a mainstream-building backup at `max` on the `claude` runtime, situational on cost. Carried by the registry — $3.00/M input, $15.00/M output, $0.75/M cached, 1,048,576 of context and 131,072 of output, reasoning and tool calls both declared. |
+| **Fable** | `moonshotai/kimi-k3` | Ruling (#418): the forensic rung. Ruling (#476): the independence backup at `low` on opencode; the coverage judge's third fallback at `low`; a mainstream-building backup at `max` on the `claude` runtime, situational on cost; the third-family formation critic and whole-repo audit voice at `max`, also on the `claude` runtime. Carried by the registry — $3.00/M input, $15.00/M output, $0.75/M cached, 1,048,576 of context and 131,072 of output, reasoning and tool calls both declared. |
 | **Opus** | `z-ai/glm-5.3` — **deprecated from every row (#476)** | Ruling (#418) mapped it as the near-peer of the estate's Opus default and of codex's `sol`; the ruling (#476) gives it no job. Kept as the record: $1.75/M input, $4.50/M output, $0.44/M cached, 1M context — tensorx.ai/models as at 2026-09-18. Absent from opencode's `tensorx` block, which tops out at `z-ai/glm-5.2`. |
 | **Sonnet** | `z-ai/glm-5.3-flash` — **deprecated from every row (#476)** | Ruling (#418) mapped it as the near-peer of Sonnet and of codex's `terra`, and #424 pinned it as the coverage judge; the ruling (#476) gives it no job, for the reason §The ruled table records. Kept as the record: $0.20/M input, $0.50/M output, $0.05/M cached, 1M context — tensorx.ai/models as at 2026-09-18; 102 coverage rows at a median $0.063; one lane over $15. Absent from the same block. |
 | *(no rung)* | `z-ai/glm-5.2`, `moonshotai/kimi-k2.6`, and the other 23 | The generations under the pins, and this provider's other vendors — Qwen, DeepSeek, MiniMax, Nemotron, `openai/gpt-oss-120b`. Twenty-six ids in the provider on 2026-09-18; named so the pinned rung is not mistaken for the whole catalogue. |
@@ -376,7 +378,8 @@ own figure, #476; the request counts behind it are the cockpit's records), and
 card in this table. So "cheap" reads as cheap per judge run and not per lane, and a lane
 here is the leader's deliberate exception, priced before dispatch. The
 instrument that would show the next such bill on the board before the invoice
-is teomach-cockpit's (teomach-cockpit#317).
+is delivered: a lane's metered spend is read at teardown from the runtime's
+own records (teomach-cockpit#340).
 
 **The mapping is the human's role ruling (#418), not a benchmark claim** —
 the precedent is #404 for codex and #406 for Gemini. Nothing has ranked a
@@ -412,11 +415,11 @@ where the wiring is its.
 | Ruled row (#476) | Runner | Dispatch spelling |
 |---|---|---|
 | Leader | Claude Code | the `flight`/`squadron` leader tab, on the box's model and effort; the codex backup seat waits on the runtime flag, teomach-cockpit#324 |
-| Lanes on Claude — mainstream, complex, templated | Claude Code | `wingman --model <full id>` — `claude-opus-5`, `claude-fable-5-1`, `claude-sonnet-5` by row; effort per the Claude Code bullet below |
+| Lanes on Claude — mainstream, complex, templated | Claude Code | `wingman -m <full id>` — `claude-opus-5`, `claude-fable-5-1`, `claude-sonnet-5` by row; effort per the Claude Code bullet below |
 | Lanes and critics on codex | codex | `-m gpt-6-astra` (or `gpt-5.6-terra`) with `-c model_reasoning_effort=<v>` on `codex exec`; through `wingman -x -m <id>` the effort setting has no flag, not established otherwise |
 | Reviewer, templated backup and backup critic on Gemini | opencode | `--model google/gemini-3.8-flash --variant high` |
-| Every Kimi K3 seat but one | opencode | `--model tensorx/moonshotai/kimi-k3`, the effort (`low` for a judge packet, `max` for a critic) in the provider config — teomach-cockpit#283 |
-| Kimi K3 as a mainstream-building backup | `claude` runtime | `--model moonshotai/kimi-k3`, bare, pointed at TensorX by the cockpit's wiring; no effort setting reaches it (teomach-cockpit#288) |
+| Kimi K3's judge seat | opencode | `--model tensorx/moonshotai/kimi-k3`, `low` in the provider config — teomach-cockpit#283 |
+| Kimi K3 as builder backup or critic | `claude` runtime | `--model moonshotai/kimi-k3`, bare, pointed at TensorX by the cockpit's wiring; no effort setting reaches it, so a critic runs at its default maximum (teomach-cockpit#288, #476) |
 | The judge's two layers | `wingman-judge` | until teomach-cockpit#325 wires the defaults: `FLIGHT_JUDGE_RUNNER=claude FLIGHT_JUDGE_MODEL=claude-sonnet-5 FLIGHT_CROSS_RUNNER=opencode FLIGHT_CROSS_MODEL_OPENCODE=google/gemini-3.8-flash FLIGHT_CROSS_VARIANT=high` on the command line |
 
 **Effort levels are not a scale shared across vendors, so an effort setting
@@ -428,9 +431,9 @@ only within one vendor.
 **On the `claude` runtime the effort field is not spent at all.** TensorX's
 Anthropic-compatible endpoint ignores the effort field Claude Code sends for
 every model (teomach-cockpit#288), so on Claude Code a TensorX model always
-runs at its default, which is max — the reason Kimi's judge and critic seats
-are opencode's, and the reason its one `claude`-runtime seat runs at `max`
-with no lever.
+runs at its default, which is max — the reason Kimi's judge seat is
+opencode's, and the reason its `claude`-runtime seats (builder backup and
+critic) run at `max` with no lever.
 
 **What the ruling leaves open, named so it is not mistaken for settled:**
 whether Gemini 3.8 Flash's findings as the reviewer are accepted at the rate
@@ -442,8 +445,8 @@ passively off the journal.
 
 - **In a session:** pick the model before invoking the skill (`/model`, or the
   launch flag). The tier table above is the lookup.
-- **On a Claude Code lane:** the model is `wingman --model <full-model-id>`
-  (`-m` is the short spelling) — the dispatch verb refuses an alias. Effort
+- **On a Claude Code lane:** the model is `wingman -m <full-model-id>` —
+  the dispatch verb refuses an alias. Effort
   is Claude Code's own `--effort <level>`, and `wingman` carries no flag for
   it as at 2026-09-21 (its usage line has `-m` and nothing for effort), so a `wingman` lane's effort is the
   box's `~/.claude/settings.json` value; the ruled defaults for the verb
@@ -472,7 +475,7 @@ passively off the journal.
   `docs/cross-model.md` (teomach-cockpit).
 - **On a TensorX id:** opencode takes it behind a `tensorx/` prefix —
   `--model tensorx/moonshotai/kimi-k3` — with Kimi's effort in the provider
-  config; that is the runner for every Kimi seat but one. The `claude`
+  config; that is the runner for Kimi's judge seat alone. The `claude`
   runtime takes the bare id, `--model moonshotai/kimi-k3`, pointed at the
   endpoint by the cockpit's wiring, and spends no effort setting.
 

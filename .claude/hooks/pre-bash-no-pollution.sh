@@ -37,29 +37,49 @@
 # `method/references/environment-ladder.md` holds the rule; this file does not
 # restate it.
 #
+# HOW IT READS A COMMAND. A shell lexer (the awk program in `lex`, below)
+# walks the string the way bash tokenises it — quotes, backslashes,
+# backslash-newline, comments, `;`/`&`/`|`/newline as separators, control
+# words, `( )` and `{ }`, redirections, heredocs — and yields one record per
+# SIMPLE COMMAND with its words quote-removed, one per redirection with its
+# target, and one per scope opened or closed. Text a shell will run is
+# followed into: a `$( )`, `<( )`, `>( )` or backtick substitution; the body
+# a shell is handed by `-c`, by `eval`, by a pipe or by a heredoc; the command
+# `find -exec` runs; the words `xargs` passes on. The scans below read only
+# those records, so "at a command position" is a lookup and never a regex,
+# and a `>` in a quoted sentence is a character. `--lex` on the command line
+# prints the records for a payload instead of judging them — the way to see
+# what the guard saw.
+#
 # HONEST LIMITS, stated rather than discovered later:
 #
 #   · A missing or non-executable hook script FAILS OPEN (measured, Claude Code
 #     2.1.220) — so this is a discipline with teeth, not a boundary. The
 #     SessionStart guard tests for it positively, which is the only reason its
 #     silence means anything.
-#   · It reads the command AS WRITTEN. A `bash -c` with a constructed string, or
-#     a path arriving through a variable, is not seen. It closes the habitual
-#     path, which is the one that actually leaks.
+#   · It reads what is LITERAL. A path or a command arriving through a
+#     variable (`touch "$f"`, `bash -c "$cmd"`), an alias or a function
+#     defined in an earlier call, is not seen; a variable-led path counts as
+#     relative, so it is treated as inside. It closes the habitual path, which
+#     is the one that actually leaks.
+#   · It reads what is IN THE STRING. A script file a shell is given
+#     (`bash setup.sh`, `source x`, `. x`) is not opened; a path `xargs`
+#     reads from stdin is not seen; a heredoc or pipe into an interpreter
+#     that is not a shell (`python3 <<EOF`) is data to this guard, whatever
+#     that interpreter does with it; a pipe reaches a bare shell only from
+#     the command directly before it. A runner that leaves the machine
+#     (`ssh`, `podman exec`) is not followed.
 #   · Relative paths are treated as inside the tree, because the payload's `cwd`
 #     is the SESSION's directory and not where the command will run (measured):
 #     a `cd` in an earlier tool call leaves no evidence at all. A `cd` to an
 #     outside absolute path in THIS command is caught, being the one case there
-#     is evidence for.
-#   · Quoting is read, but only as far as a balanced command goes. An operator
-#     inside a quoted argument is masked (see the block above the scans), so a
-#     `>` in a sentence is a `>`; an UNBALANCED quote leaves the walker in a
-#     quoted state to the end of the string and masks the rest of it. Bash
-#     will not run such a command either, so the string was never a write.
-#   · A heredoc's body is data and not command text, so it is stripped before
-#     the scans read it — the block above them says why. The cost is real and
-#     runs the other way: a multi-line `<<` that is a shift rather than a
-#     heredoc takes the lines after it with it, and those lines go unscanned.
+#     is evidence for, and is scoped to the subshell, substitution or runner
+#     it ran in — a `{ }` group and `eval` run in the same shell and keep it.
+#   · An UNBALANCED quote or substitution runs to the end of the string and
+#     the words it holds are judged as they stand. Bash will not run such a
+#     command either, so a refusal there costs nothing.
+#   · A function's body is read where it is defined, not where it is called:
+#     `f() { touch /etc/motd; }` is refused at the definition.
 #
 # WHY DENY RATHER THAN ASK. The model sees the stderr of an `exit 2` and acts on
 # it, so a refusal naming the exact alternative gets repaired by the agent with
@@ -89,22 +109,11 @@ refuse() {   # refuse <headline> <what-to-do-instead...>
     exit 2
 }
 
-# One wrapping quote pair off a word, left in UNQUOTED. A path operand and a
-# command word are both written with them, so the stripping is one idiom and
-# not two that drift. It assigns where the rest of this file prints, because
-# this guard runs on every Bash call and the subshell a `$(unquote …)` costs
-# was measured at 4 ms of a 36 ms run, several operands at a time.
-UNQUOTED=""
-unquote() {   # unquote <word> — the word, one quote pair off, in UNQUOTED
-    UNQUOTED="$1"
-    UNQUOTED="${UNQUOTED%\"}"; UNQUOTED="${UNQUOTED#\"}"
-    UNQUOTED="${UNQUOTED%\'}"; UNQUOTED="${UNQUOTED#\'}"
-}
-
 # A path this repo's work may write to. Anything else absolute is outside.
+# The word arrives quote-removed from the lexer, so `'/etc/motd'` is
+# `/etc/motd` here and a refusal names it as the command wrote it.
 inside() {
-    local p notes
-    unquote "$1"; p="$UNQUOTED"
+    local p="$1" notes
     # The patterns below are literal text in someone else's command string, not
     # paths for this shell to expand — hence the quoting shellcheck warns about.
     # shellcheck disable=SC2088,SC2016
@@ -132,130 +141,9 @@ inside() {
     return 1
 }
 
-# The five masked operators back to the characters they stand for. A refusal
-# names the path the way the command wrote it, sentinels and all being this
-# guard's own bookkeeping and no business of the message.
-demask() {
-    local s="$1"
-    s="${s//$'\001'/>}"; s="${s//$'\002'/<}"; s="${s//$'\003'/;}"
-    s="${s//$'\004'/|}"; s="${s//$'\005'/&}"
-    printf '%s' "$s"
-}
-
-# One command per segment: splitting on the separators puts the command word
-# first, which is what makes "at a command position" a lookup rather than a
-# regex nobody can read. Both scans below take their segments from here, so
-# the runner test and the verb scan cannot drift apart about where a command
-# begins.
-segments() {   # segments <text> — one segment per line
-    printf '%s\n' "$1" | awk '{ gsub(/&&|\|\||\||;/, "\n"); print }'
-}
-
-# A word that hands its arguments to a command rather than being one. Each
-# takes its own flags first, and the timers and schedulers take a duration or
-# a niceness after them — never a verb, no command being spelled as a bare
-# number. `time` sits here too, which is what reads `time -p dnf install jq`
-# as a `dnf`.
-is_wrapper() {   # is_wrapper <word>
-    case "$1" in
-      time|exec|command|builtin|nohup|env|nice|timeout|stdbuf|setsid|ionice|xargs)
-        return 0 ;;
-    esac
-    return 1
-}
-
-# The command word of a segment, left in WORDS with its arguments after it —
-# a caller reads the verb as "${WORDS[0]}" and its operands as
-# "${WORDS[@]:1}". Returns 1 when the segment holds no command word at all.
-# OPENERS counts the `(`/`{` stripped and SUBSHELLS the `(` alone, so a caller
-# can tell a scope that ends from one that does not; STRIPPED holds the
-# wrappers stepped over, which are still command words for `shell_runner`.
-#
-# WHAT STANDS IN FRONT OF A COMMAND WORD WITHOUT BEING ONE, each measured
-# (teomach-skills#481): the leading `VAR=value` assignments the split leaves
-# in place, a subshell or group opening (`(`, `{`), a negation (`!`), a
-# backslash escaping an alias, and the wrappers above. Read with any of them
-# left on, `(bash -c '…')` is the word `(bash`, which matches no runner — so
-# the masking below stayed ON over a real write — and `(sudo dnf install jq)`,
-# `exec sudo …` and `nice -n 10 dnf install jq` reached no refusal at all.
-#
-# The word is unquoted, so `"sudo"` is `sudo`, and basenamed ONLY where it is
-# spelled absolutely, so `/usr/bin/pip` is `pip`. A relative spelling is left
-# whole: `.venv/bin/pip` is the project-local environment the `pip` refusal
-# below points the reader at, and basenaming it would refuse this guard's own
-# remedy.
-command_word() {   # command_word <segment>
-    # shellcheck disable=SC2206   # deliberate: split the segment into words
-    WORDS=($1)
-    OPENERS=0; SUBSHELLS=0; STRIPPED=()
-    local w
-    while [ "${#WORDS[@]}" -gt 0 ]; do
-        w="${WORDS[0]}"
-        while [ -n "$w" ]; do
-            case "$w" in
-              '('*) OPENERS=$((OPENERS + 1)); SUBSHELLS=$((SUBSHELLS + 1)); w="${w#?}" ;;
-              '{'*) OPENERS=$((OPENERS + 1)); w="${w#?}" ;;
-              '!'*) w="${w#?}" ;;
-              *)    break ;;
-            esac
-        done
-        w="${w#\\}"
-        if [ -z "$w" ] || [[ "$w" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; then
-            WORDS=("${WORDS[@]:1}"); continue
-        fi
-        unquote "$w"; w="$UNQUOTED"
-        # Literal text in someone else's command string, not paths for this
-        # shell to expand — the same quoting `inside()` carries, for the same
-        # reason.
-        # shellcheck disable=SC2088,SC2016
-        case "$w" in
-          /*|"~/"*|'$HOME/'*|'${HOME}/'*) w="${w##*/}" ;;
-        esac
-        if is_wrapper "$w"; then
-            STRIPPED+=("$w")
-            WORDS=("${WORDS[@]:1}")
-            while [ "${#WORDS[@]}" -gt 0 ]; do
-                if [ "${WORDS[0]:0:1}" = "-" ] ||
-                   [[ "${WORDS[0]}" =~ ^[0-9]+([.][0-9]+)?[smhd]?$ ]]; then
-                    WORDS=("${WORDS[@]:1}")
-                else
-                    break
-                fi
-            done
-            continue
-        fi
-        WORDS[0]="$w"
-        return 0
-    done
-    return 1
-}
-
-# 0 when any command word in <text> hands a string to another shell, which is
-# what switches the masking off. The list is the runners a session actually
-# reaches for, plus the elevations — `sudo bash -c` must keep reaching the
-# elevation refusal below whatever its argument is quoted like.
-shell_runner() {
-    local seg w
-    while IFS= read -r seg; do
-        command_word "$seg" || continue
-        # The wrappers `command_word` stepped over are command words here:
-        # `timeout 5 bash -c …` hands a string to a shell whichever of the two
-        # the verb scan reads as its verb.
-        for w in ${STRIPPED[@]+"${STRIPPED[@]}"} "${WORDS[0]}"; do
-            case "$w" in
-              sh|bash|dash|zsh|ksh|fish|eval|exec|source|.|env|nohup|timeout|watch|xargs|\
-              ssh|su|sudo|doas|pkexec|run0|podman|docker|nsenter|chroot|flatpak-spawn|\
-              toolbox|distrobox)
-                return 0 ;;
-            esac
-        done
-    done < <(segments "$1")
-    return 1
-}
-
 outside_write() {   # outside_write <path> <verb>
     inside "$1" && return 0
-    refuse "this writes outside the working tree — \`$2\` targeting $(demask "$1")" \
+    refuse "this writes outside the working tree — \`$2\` targeting $1" \
 "A session's deliverables are the repo it is in. Nothing it produces should" \
 "land where the next clone of this repo cannot see it, and nothing it needs" \
 "should be installed where the next job inherits it." \
@@ -267,193 +155,382 @@ outside_write() {   # outside_write <path> <verb>
 "    an ephemeral \`podman compose\` world, torn down after"
 }
 
-# A heredoc's body is data, not command text: everything from the `<<DELIM`
-# line to the delimiter line. It is removed before either scan below reads
-# $CMD, because left in, the first `>` in a line of prose opens a redirection
-# target — a document mentioning `~/.claude/projects/<key>/*.jsonl` was refused
-# as a write to `/*.jsonl`, and `cat > file <<'MD'` is how a session writes a
-# document at all. It is the same distinction the `sed` case makes further
-# down between a script and a file operand: what a token IS beats what it
-# looks like.
+# THE LEXER. One record per line, fields separated by the unit separator
+# (\037), which no command string carries:
 #
-# What survives the strip, deliberately: the operator line itself, so
-# `cat > /etc/motd <<'MD'` still refuses; every line after the delimiter,
-# so a second command in the same string is still read; and `<<<`, which is a
-# here-string carrying its word on that line and no body at all. Several
-# heredocs on one line take their bodies in order, hence a queue of pending
-# delimiters, and `<<-` lets the line that ends it be indented with tabs.
-CMD="$(printf '%s\n' "$CMD" | awk '
-    BEGIN {
-        q  = sprintf("%c", 39)
-        RE = "<<-?[ \t]*(\\\\?[A-Za-z_][A-Za-z0-9_]*|\"[^\"]*\"|" q "[^" q "]*" q ")"
-    }
-    function delim_of(tok,   d, c) {
-        d = tok
-        sub(/^<<-?[ \t]*/, "", d)
-        c = substr(d, 1, 1)
-        if (c == "\\") return substr(d, 2)
-        if (c == "\"" || c == q) return substr(d, 2, length(d) - 2)
-        return d
-    }
-    {
-        if (pending > 0) {                      # inside a body: drop it
-            line = $0
-            if (dash[1]) sub(/^\t+/, "", line)
-            if (line == delim[1]) {
-                for (i = 1; i < pending; i++) { delim[i] = delim[i+1]; dash[i] = dash[i+1] }
-                pending--
-            }
-            next
-        }
-        rest = $0
-        while (match(rest, RE)) {
-            tok  = substr(rest, RSTART, RLENGTH)
-            pre  = substr(rest, 1, RSTART - 1)
-            rest = substr(rest, RSTART + RLENGTH)
-            if (pre ~ /<$/) continue          # `<<<word` — a here-string
-            pending++
-            delim[pending] = delim_of(tok)
-            dash[pending]  = (tok ~ /^<<-/)
-        }
-        print
-    }
-')"
-
-# A `\` ending a line continues the command onto the next, so the two are one
-# line of command text and not two. Both scans read a line at a time, and left
-# unjoined the verb sits on one line and its operand on the next, where no
-# verb governs it — `touch \` then `/etc/motd` was allowed, and a redirection
-# split the same way took the backslash as its target. Joined here, after the
-# heredoc bodies are gone (so a `\` ending a line of prose is not a
-# continuation of anything) and before the masking walks the quoting.
-CMD="$(printf '%s\n' "$CMD" | awk '
-    {
-        line = (cont ? line $0 : $0)
-        if (line ~ /\\$/) { sub(/\\$/, " ", line); cont = 1; next }
-        cont = 0; print line
-    }
-    END { if (cont) print line }
-')"
-
-# A quoted argument is DATA, not command text. The guard reads the command AS
-# WRITTEN, so an operator inside a quoted string reads as the operator it looks
-# like unless something stops it. Three measured shapes, each a
-# `gh issue create --body '…'` describing this guard's own refusal back to it:
+#   C <word> <word> …   a simple command, words quote-removed, leading
+#                       assignments and wrappers already stepped over, so
+#                       the first field is the verb (`time`, `exec`, `env`,
+#                       `nice`, `timeout`, `xargs` and their kin hand their
+#                       arguments to a command rather than being one, and
+#                       their own flags and a duration or niceness go with
+#                       them). A verb spelled absolutely is basenamed, so
+#                       `/usr/bin/pip` is `pip`; a relative spelling is left
+#                       whole, because `.venv/bin/pip` is the project-local
+#                       environment the pip refusal points the reader at.
+#   R <op> <target>     a redirection; `>`, `>>`, `>|`, `&>`, `&>>`, `<>` and
+#                       `>&` with a path are writes, the rest are reads.
+#   O sub | O grp       a scope opens — a subshell, substitution, runner body
+#                       or `find -exec` (`sub`), or a `{ }` group (`grp`).
+#   X sub | X grp       that scope closes.
 #
-#   · `ran `cat > ~/Code/flight-logs/x.md` and it failed` — a redirection;
-#   · `offered /tmp -> ~/Code/flight-logs/x.md instead` — the `>` of an arrow,
-#     so the backticks are incidental: prose alone is enough;
-#   · `it failed; mkdir ~/Code/flight-logs was next` — the `;` splits the body
-#     and `mkdir` becomes the second command's verb.
-#
-# The third is the segment splitter and not the redirection scan, which is why
-# the masking has to serve both.
-#
-# So `> < ; | &` inside a single- or double-quoted region is replaced by a
-# sentinel before either scan reads $CMD. The five are kept distinct and put
-# back by `demask` for a refusal message, so a path that genuinely carries one
-# is still named the way it was written.
-#
-# WHAT IS NOT MASKED, and why refusing to mask it is the point: text a shell
-# will actually run. A backtick or `$(…)` substitution is live, and so is
-# every quoted string in a command that hands one to another shell —
-# `bash -c 'cat > /etc/motd'` is command text that merely looks quoted. There
-# is no reading the argument that tells them apart, so the masking is switched
-# off for the WHOLE command the moment any command word in it is a runner.
-# Over-refusing inside a `bash -c` is the nuisance that stays; under-refusing
-# a write is still the failure worth having. It is the same distinction the
-# `sed` case makes below: what a token IS beats what it looks like.
-MASKED="$(printf '%s\n' "$CMD" | awk '
+# Records come in the order the shell would reach them: a substitution's
+# commands before the command whose word holds it, a heredoc's body after the
+# line that opened it, a runner's body right after the runner's own record.
+# The reader below keeps the scope depth for the one piece of state that
+# crosses records, a `cd` out of the tree.
+lex() {   # lex <command text> — records on stdout
+    printf '%s\n' "$1" | awk '
     BEGIN {
         SQ = sprintf("%c", 39); DQ = sprintf("%c", 34); BQ = sprintf("%c", 96)
-        OPS = ">" "<" ";" "|" "&"
-        for (i = 1; i <= 5; i++) SENT[substr(OPS, i, 1)] = sprintf("%c", i)
-        depth = 0            # st[1..depth]: the quoting contexts still open
+        US = sprintf("%c", 31)
+        M_NONE = 0; M_TEST = 1; M_FOR = 2; M_CASEIN = 3; M_CASEPAT = 4; M_FUNC = 5
+        split("sh bash dash zsh ksh", a, " "); for (k in a) SHELL[a[k]] = 1
+        split("time exec command builtin nohup env nice timeout stdbuf setsid ionice xargs", a, " ")
+        for (k in a) WRAPPER[a[k]] = 1
+        # a wrapper flag whose value is the NEXT word, so `xargs -I {} cp` and
+        # `env -u FOO touch` reach the verb after the value and not the value
+        split("xargs:-I xargs:-i xargs:-L xargs:-n xargs:-P xargs:-s xargs:-d xargs:-E xargs:-a " \
+              "env:-u env:-C env:-S timeout:-k timeout:-s nice:-n ionice:-c ionice:-n ionice:-p " \
+              "stdbuf:-i stdbuf:-o stdbuf:-e exec:-a", a, " ")
+        for (k in a) VALFLAG[a[k]] = 1
+        split("-exec -execdir -ok -okdir", a, " "); for (k in a) FINDEXEC[a[k]] = 1
+        nhd = 0; ncmd = 0; prev_pipe = 0; prev_id = 0
     }
-    {
-        out = ""; i = 1; L = length($0)
-        while (i <= L) {
-            c = substr($0, i, 1)
-            top = (depth ? st[depth] : "OUT")
-            if (top == "SQ") {                       # nothing is special but the close
-                if (c == SQ) { depth--; out = out c }
-                else if (c in SENT) out = out SENT[c]
-                else out = out c
-                i++; continue
-            }
-            if (top == "DQ") {
-                if (c == "\\") { out = out substr($0, i, 2); i += 2; continue }
-                if (c == DQ)   { depth--; out = out c; i++; continue }
-                if (c == BQ)   { st[++depth] = "BQ"; out = out c; i++; continue }
-                if (c == "$" && substr($0, i + 1, 1) == "(") {
-                    st[++depth] = "SUB"; out = out "$("; i += 2; continue }
-                if (c in SENT) { out = out SENT[c]; i++; continue }
-                out = out c; i++; continue
-            }
-            # live — OUT, or inside a substitution, where operators are real
-            if (c == "\\") { out = out substr($0, i, 2); i += 2; continue }
-            if (c == SQ)   { st[++depth] = "SQ"; out = out c; i++; continue }
-            if (c == DQ)   { st[++depth] = "DQ"; out = out c; i++; continue }
-            if (c == BQ)   { if (top == "BQ") depth--; else st[++depth] = "BQ"
-                             out = out c; i++; continue }
-            if (c == "$" && substr($0, i + 1, 1) == "(") {
-                st[++depth] = "SUB"; out = out "$("; i += 2; continue }
-            if (c == ")" && top == "SUB") { depth--; out = out c; i++; continue }
-            out = out c; i++
+    { src = src $0 "\n" }
+    END { lex(src, 1, "", st) }
+
+    function emit(rec) { gsub(/\n/, " ", rec); print rec }
+
+    # --- words -------------------------------------------------------------
+    function reset(st) { st["w"] = ""; st["wq"] = 0; st["have"] = 0 }
+    function app(st, t, q) { st["w"] = st["w"] t; st["have"] = 1; if (q) st["wq"] = 1 }
+
+    # A word is complete. Where it goes depends on what stands before it.
+    function endword(st,    w, q) {
+        if (!st["have"]) return
+        w = st["w"]; q = st["wq"]; reset(st)
+        if (st["redir"] != "") { emit("R" US st["redir"] US w); st["redir"] = ""; return }
+        if (st["hdwait"]) {
+            nhd++; hd_delim[nhd] = w; hd_quoted[nhd] = q; hd_dash[nhd] = st["hddash"]
+            if (!st["id"]) st["id"] = ++ncmd
+            hd_cmd[nhd] = st["id"]; st["hdwait"] = 0
+            return
         }
-        print out
+        if (st["mode"] == M_FOR || st["mode"] == M_CASEPAT) return
+        if (st["mode"] == M_CASEIN) { if (!q && w == "in") st["mode"] = M_CASEPAT; return }
+        if (st["mode"] == M_FUNC) { st["mode"] = M_NONE; return }
+        if (st["mode"] == M_TEST) {
+            if (!q && w == "]]") st["mode"] = M_NONE
+            st[++st["nw"]] = w; return
+        }
+        if (!q && w == "}") { endcmd(st); emit("X" US "grp"); return }
+        if (st["nw"] == 0 && !q) {          # a reserved word at a command position
+            if (w ~ /^(if|then|else|elif|do|while|until|!|coproc)$/) return
+            if (w == "{") { emit("O" US "grp"); return }
+            if (w ~ /^(fi|done)$/) return
+            if (w == "esac") { if (st["casedepth"] > 0) st["casedepth"]--; return }
+            if (w == "for" || w == "select") { st["mode"] = M_FOR; return }
+            if (w == "case") { st["mode"] = M_CASEIN; st["casedepth"]++; return }
+            if (w == "function") { st["mode"] = M_FUNC; return }
+            if (w == "[[") st["mode"] = M_TEST
+        }
+        st[++st["nw"]] = w
     }
-')"
-shell_runner "$MASKED" || CMD="$MASKED"
 
-# Every redirection target in the command, whatever segment it sits in.
-while read -r t; do
-    [ -n "$t" ] || continue
-    outside_write "$t" "redirection"
-done < <(printf '%s\n' "$CMD" |
-         grep -oE '>>?[[:space:]]*[^[:space:]<>|&;()]+' |
-         sed -E 's/^>>?[[:space:]]*//')
+    # A separator: the simple command so far is done.
+    function endcmd(st,    n, k) {
+        n = st["nw"]
+        if (st["mode"] == M_FOR) st["mode"] = M_NONE
+        if (n > 0) {
+            if (!st["id"]) st["id"] = ++ncmd
+            for (k = 1; k <= n; k++) cw[k] = st[k]
+            command(cw, n, st["id"])
+        }
+        st["nw"] = 0; st["id"] = 0
+    }
 
-# A `cd` out of the tree belongs to the shell that ran it. `(cd /etc)` is a
-# SUBSHELL: it ends, and the parent never moved — measured allowed on the
-# guard before this scan read `(cd` as a `cd` at all. `{ cd /etc ; }` is a
-# group in the same shell, so its `cd` does carry. Hence two counts: how many
-# openings the command-word reader has stripped and not yet seen closed (the
-# budget a trailing closer may spend), and how many of those are subshells
-# (the scope a `cd` is remembered within).
-cd_outside=""; cd_scope=0; open_depth=0; sub_depth=0
-leave_closed_scopes() {
-    [ -n "$cd_outside" ] && [ "$sub_depth" -lt "$cd_scope" ] && cd_outside=""
-    return 0
+    # --- a simple command ----------------------------------------------------
+    # Assignments and wrappers stepped over, the verb basenamed where it is
+    # absolute, the record emitted, and whatever the command hands to another
+    # shell followed into.
+    function command(w, n, id,    k, m, v, out, cflag, body, sst, cnt, j) {
+        k = 1
+        while (k <= n) {
+            v = w[k]
+            if (v ~ /^[A-Za-z_][A-Za-z0-9_]*(\[[^]]*\])?\+?=/) { k++; continue }
+            if (v ~ /^(\/|~\/|\$HOME\/|\$\{HOME\}\/)/) { sub(/.*\//, "", v) }
+            if (v in WRAPPER) {
+                k++
+                while (k <= n && (w[k] ~ /^-/ || w[k] ~ /^[0-9]+([.][0-9]+)?[smhd]?$/))
+                    k += ((v ":" w[k]) in VALFLAG) ? 2 : 1
+                continue
+            }
+            break
+        }
+        if (k > n) return
+        w[k] = v
+        out = "C"
+        for (m = k; m <= n; m++) out = out US w[m]
+        emit(out)
+        cmd_verb[id] = v
+        if (v in SHELL) {
+            cflag = 0
+            for (m = k + 1; m <= n; m++) {
+                if (w[m] == "--") { m++; break }
+                if (w[m] ~ /^--/) continue
+                if (w[m] == "-o") { m++; continue }
+                if (w[m] ~ /^-/) { if (w[m] ~ /c/) cflag = 1; continue }
+                break
+            }
+            if (cflag && m <= n) {
+                emit("O" US "sub"); lex(w[m], 1, "", sst); emit("X" US "sub")
+            } else if (m > n && prev_pipe && prev_id) {
+                # a bare shell fed by the command before the pipe: that
+                # command`s literal words are its source
+                hd_shell[prev_id] = 1
+                for (j = 1; j <= prev_nargs[prev_id]; j++) {
+                    emit("O" US "sub"); lex(prev_args[prev_id, j], 1, "", sst); emit("X" US "sub")
+                }
+            }
+        } else if (v == "eval") {
+            body = ""
+            for (m = k + 1; m <= n; m++) body = body (m > k + 1 ? " " : "") w[m]
+            if (body != "") lex(body, 1, "", sst)      # eval runs in this shell
+        } else if (v == "find") {
+            for (m = k + 1; m <= n; m++) {
+                if (!(w[m] in FINDEXEC)) continue
+                cnt = 0
+                for (j = m + 1; j <= n && w[j] != ";" && w[j] != "+"; j++) sst[++cnt] = w[j]
+                if (cnt) { emit("O" US "sub"); command(sst, cnt, ++ncmd); emit("X" US "sub") }
+                m = j
+            }
+        }
+        prev_id = id; prev_nargs[id] = n - k
+        for (m = k + 1; m <= n; m++) prev_args[id, m - k] = w[m]
+    }
+
+    # --- heredocs -----------------------------------------------------------
+    # Bodies are consumed at the newline that ends the line they opened on.
+    # What each body IS depends on who reads it: shell source when the
+    # consumer is a shell or pipes on to one; live where the delimiter is
+    # unquoted, so a substitution in it runs; data otherwise.
+    function heredocs(s, i, base,    k, L, line, j, body, d, sst) {
+        L = length(s)
+        for (k = base + 1; k <= nhd; k++) {
+            body = ""
+            while (i <= L) {
+                j = index(substr(s, i), "\n")
+                if (j == 0) { line = substr(s, i); i = L + 1 } else { line = substr(s, i, j - 1); i += j }
+                d = line; if (hd_dash[k]) sub(/^\t+/, "", d)
+                if (d == hd_delim[k]) break
+                body = body line "\n"
+            }
+            if (cmd_verb[hd_cmd[k]] in SHELL || hd_shell[hd_cmd[k]]) {
+                emit("O" US "sub"); lex(body, 1, "", sst); emit("X" US "sub")
+            } else if (!hd_quoted[k]) {
+                dq(body, 1, sst, "")
+            }
+        }
+        nhd = base
+        return i
+    }
+
+    # --- substitutions --------------------------------------------------------
+    function subst(s, i, st,    j, sst) {     # at "$(": lex to ")", word keeps the text
+        emit("O" US "sub"); j = lex(s, i + 2, ")", sst); emit("X" US "sub")
+        app(st, substr(s, i, j - i), 0)
+        return j
+    }
+    function procsub(s, i, st,    j, sst) {   # at "<(" or ">("
+        emit("O" US "sub"); j = lex(s, i + 2, ")", sst); emit("X" US "sub")
+        app(st, substr(s, i, j - i), 0)
+        return j
+    }
+    function backtick(s, i, st,    j, L, c, body, sst) {
+        L = length(s); j = i + 1; body = ""
+        while (j <= L) {
+            c = substr(s, j, 1)
+            if (c == "\\" && substr(s, j + 1, 1) ~ /[\\`$]/) { body = body substr(s, j + 1, 1); j += 2; continue }
+            if (c == BQ) break
+            body = body c; j++
+        }
+        emit("O" US "sub"); lex(body, 1, "", sst); emit("X" US "sub")
+        app(st, substr(s, i, j - i + 1), 0)
+        return j + 1
+    }
+    function arith(s, i,    L, depth) {       # at the char after "((": index after "))"
+        L = length(s); depth = 0
+        while (i <= L) {
+            if (substr(s, i, 1) == "(") depth++
+            else if (substr(s, i, 1) == ")") {
+                if (depth == 0 && substr(s, i + 1, 1) == ")") return i + 2
+                if (depth > 0) depth--
+            }
+            i++
+        }
+        return i
+    }
+    # Double-quoted text, to the closing quote (or the end, for a heredoc
+    # body): only `\`, `$(`, `$((` and a backtick are special.
+    function dq(s, i, st, term,    L, c, n, j) {
+        L = length(s)
+        while (i <= L) {
+            c = substr(s, i, 1)
+            if (term != "" && c == term) return i + 1
+            if (c == "\\") {
+                n = substr(s, i + 1, 1)
+                if (n == "\n") { i += 2; continue }
+                if (n ~ /[$`"\\]/) { app(st, n, 1); i += 2; continue }
+                app(st, c, 1); i++; continue
+            }
+            if (c == "$" && substr(s, i + 1, 2) == "((") { j = arith(s, i + 3); app(st, substr(s, i, j - i), 0); i = j; continue }
+            if (c == "$" && substr(s, i + 1, 1) == "(") { i = subst(s, i, st); continue }
+            if (c == BQ) { i = backtick(s, i, st); continue }
+            app(st, c, 1); i++
+        }
+        return i
+    }
+
+    # --- the walk ---------------------------------------------------------------
+    # Over s from i; stops after the terminator `term` (")" for a substitution
+    # or subshell, "" for the end of the string). Returns the index after it.
+    function lex(s, i, term, st,    L, c, n, j, base, sst) {
+        L = length(s); base = nhd
+        st["nw"] = 0; reset(st); st["redir"] = ""; st["mode"] = M_NONE; st["id"] = 0
+        st["hdwait"] = 0; st["hddash"] = 0; st["casedepth"] = 0
+        while (i <= L) {
+            c = substr(s, i, 1)
+            if (c == " " || c == "\t" || c == "\r") { endword(st); i++; continue }
+            if (c == "\n") {
+                endword(st); endcmd(st); i++
+                if (nhd > base) i = heredocs(s, i, base)
+                prev_pipe = 0
+                continue
+            }
+            if (c == "\\") {
+                n = substr(s, i + 1, 1)
+                if (n == "\n") { i += 2; continue }        # a continuation joins
+                if (n == "") { i++; continue }
+                app(st, n, 1); i += 2; continue
+            }
+            if (c == SQ) {
+                j = index(substr(s, i + 1), SQ)
+                if (j == 0) { app(st, substr(s, i + 1), 1); i = L + 1 }
+                else { app(st, substr(s, i + 1, j - 1), 1); i += j + 1 }
+                continue
+            }
+            if (c == DQ) { app(st, "", 1); i = dq(s, i + 1, st, DQ); continue }
+            if (c == "$") {
+                n = substr(s, i + 1, 1)
+                if (n == SQ || n == DQ) { i++; continue }         # a $-prefixed quote quotes as the plain one does
+                if (substr(s, i + 1, 2) == "((") { j = arith(s, i + 3); app(st, substr(s, i, j - i), 0); i = j; continue }
+                if (n == "(") { i = subst(s, i, st); continue }
+                app(st, c, 0); i++; continue
+            }
+            if (c == BQ) { i = backtick(s, i, st); continue }
+            if (st["mode"] == M_TEST) { app(st, c, 0); i++; continue }   # inside [[ ]] `>` compares
+            if (c == "#" && !st["have"]) {
+                j = index(substr(s, i), "\n"); i = (j ? i + j - 1 : L + 1); continue
+            }
+            if (c == ";") {
+                endword(st); endcmd(st); prev_pipe = 0
+                if (substr(s, i, 2) == ";;" || substr(s, i, 2) == ";&") {
+                    if (st["casedepth"] > 0) st["mode"] = M_CASEPAT
+                    i += (substr(s, i, 3) == ";;&" ? 3 : 2)
+                } else i++
+                continue
+            }
+            if (c == "&") {
+                if (substr(s, i + 1, 1) == ">") {                 # &> and &>>
+                    endword(st)
+                    if (substr(s, i + 2, 1) == ">") { st["redir"] = "&>>"; i += 3 } else { st["redir"] = "&>"; i += 2 }
+                    continue
+                }
+                endword(st); endcmd(st); prev_pipe = 0
+                i += (substr(s, i + 1, 1) == "&" ? 2 : 1)
+                continue
+            }
+            if (c == "|") {
+                if (st["mode"] == M_CASEPAT) { endword(st); i++; continue }
+                endword(st); endcmd(st)
+                n = substr(s, i + 1, 1)
+                if (n == "|") { prev_pipe = 0; i += 2 } else { prev_pipe = 1; i += (n == "&" ? 2 : 1) }
+                continue
+            }
+            if (c == "<" || c == ">") {
+                if (substr(s, i + 1, 1) == "(" && !st["have"]) { i = procsub(s, i, st); continue }
+                # a leading fd number is part of the operator, not a word
+                if (st["have"] && !st["wq"] && st["w"] ~ /^[0-9]+$/) reset(st); else endword(st)
+                if (c == "<") {
+                    if (substr(s, i, 3) == "<<<") { st["redir"] = "<<<"; i += 3; continue }
+                    if (substr(s, i, 2) == "<<") {
+                        st["hdwait"] = 1; st["hddash"] = (substr(s, i + 2, 1) == "-")
+                        i += 2 + st["hddash"]; continue
+                    }
+                    if (substr(s, i, 2) == "<&") { st["redir"] = "<&"; i += 2; continue }
+                    if (substr(s, i, 2) == "<>") { st["redir"] = "<>"; i += 2; continue }
+                    st["redir"] = "<"; i++; continue
+                }
+                if (substr(s, i, 2) == ">>") { st["redir"] = ">>"; i += 2; continue }
+                if (substr(s, i, 2) == ">|") { st["redir"] = ">|"; i += 2; continue }
+                if (substr(s, i, 2) == ">&") { st["redir"] = ">&"; i += 2; continue }
+                st["redir"] = ">"; i++; continue
+            }
+            if (c == "(") {
+                if (st["mode"] == M_CASEPAT) { endword(st); i++; continue }
+                if (st["have"]) {           # `f()` or `arr=( )`: the word is not a command
+                    emit("O" US "sub"); i = lex(s, i + 1, ")", sst); emit("X" US "sub")
+                    reset(st); if (st["mode"] == M_FUNC) st["mode"] = M_NONE
+                    continue
+                }
+                if (substr(s, i + 1, 1) == "(" && st["nw"] == 0) { i = arith(s, i + 2); continue }
+                endcmd(st)
+                emit("O" US "sub"); i = lex(s, i + 1, ")", sst); emit("X" US "sub")
+                continue
+            }
+            if (c == ")") {
+                if (st["mode"] == M_CASEPAT) { endword(st); st["mode"] = M_NONE; i++; continue }
+                endword(st); endcmd(st)
+                if (term == ")") { if (nhd > base) heredocs(s, L + 1, base); return i + 1 }
+                i++; continue                              # unmatched: a separator
+            }
+            app(st, c, 0); i++
+        }
+        endword(st); endcmd(st)
+        if (nhd > base) heredocs(s, L + 1, base)
+        return i
+    }
+    '
 }
-while IFS= read -r seg; do
-    command_word "$seg" || {
-        open_depth=$((open_depth + OPENERS)); sub_depth=$((sub_depth + SUBSHELLS))
-        leave_closed_scopes; continue; }
 
-    # A `)` or `}` ending the segment closes an opening this scan stripped at
-    # a command position, and nothing else — so at most as many come off as
-    # stand open, and a path that genuinely ends in one keeps it.
-    # The scope this segment's own command runs IN — before any closer on it
-    # is spent, because a `cd` runs inside the subshell its line opened.
-    seg_scope=$((sub_depth + SUBSHELLS))
-    budget=$((open_depth + OPENERS)); closed=0; sub_closed=0
-    while [ "$closed" -lt "$budget" ] && [ "${#WORDS[@]}" -gt 0 ]; do
-        last=$(( ${#WORDS[@]} - 1 ))
-        case "${WORDS[$last]}" in
-          *')') sub_closed=$((sub_closed + 1)) ;;
-          *'}') : ;;
-          *)    break ;;
-        esac
-        closed=$((closed + 1))
-        trimmed="${WORDS[$last]%?}"
-        if [ -n "$trimmed" ]; then WORDS[$last]="$trimmed"
-        else WORDS=(${WORDS[@]+"${WORDS[@]:0:$last}"}); fi
-    done
-    open_depth=$((open_depth + OPENERS - closed))
-    sub_depth=$((sub_depth + SUBSHELLS - sub_closed))
-    [ "${#WORDS[@]}" -gt 0 ] || { leave_closed_scopes; continue; }
+if [ "${1:-}" = "--lex" ]; then lex "$CMD"; exit 0; fi
 
+# A `cd` out of the tree belongs to the shell that ran it. A subshell,
+# substitution or runner body ends and the parent never moved; a `{ }` group
+# and `eval` are the same shell, so theirs carries. Hence the depth of `sub`
+# scopes standing open, and the depth the `cd` was seen at.
+cd_outside=""; cd_scope=0; sub_depth=0
+while IFS=$'\037' read -r -a rec; do
+    [ "${#rec[@]}" -gt 0 ] || continue
+    case "${rec[0]}" in
+      O) [ "${rec[1]:-}" = sub ] && sub_depth=$((sub_depth + 1)); continue ;;
+      X) if [ "${rec[1]:-}" = sub ]; then
+             sub_depth=$((sub_depth - 1))
+             [ -n "$cd_outside" ] && [ "$sub_depth" -lt "$cd_scope" ] && cd_outside=""
+         fi
+         continue ;;
+      R) case "${rec[1]:-}" in
+           '>'|'>>'|'>|'|'&>'|'&>>'|'<>') outside_write "${rec[2]:-}" "redirection" ;;
+           '>&') case "${rec[2]:-}" in ''|-|[0-9]*) ;; *) outside_write "${rec[2]}" "redirection" ;; esac ;;
+         esac
+         continue ;;
+      C) ;;
+      *) continue ;;
+    esac
+
+    WORDS=("${rec[@]:1}")
+    [ "${#WORDS[@]}" -gt 0 ] || continue
     verb="${WORDS[0]}"
     args=("${WORDS[@]:1}")
     bare=()
@@ -545,7 +622,7 @@ while IFS= read -r seg; do
 
       cd)
         if [ -n "${bare[0]:-}" ] && ! inside "${bare[0]}"; then
-            cd_outside="${bare[0]}"; cd_scope="$seg_scope"
+            cd_outside="${bare[0]}"; cd_scope="$sub_depth"
         fi
         ;;
 
@@ -609,7 +686,7 @@ while IFS= read -r seg; do
     if [ -n "$cd_outside" ]; then
         case "$verb" in
           cp|mv|install|rsync|ln|rm|rmdir|mkdir|touch|truncate|unlink|tee|dd|chmod|chown|chgrp)
-            refuse "this changes directory to $(demask "$cd_outside") and then writes (\`$verb\`)" \
+            refuse "this changes directory to $cd_outside and then writes (\`$verb\`)" \
 "Everything after that \`cd\` lands outside this repo, whether or not the paths" \
 "look relative." \
 "" \
@@ -619,7 +696,6 @@ while IFS= read -r seg; do
             ;;
         esac
     fi
-    leave_closed_scopes
-done < <(segments "$CMD")
+done < <(lex "$CMD")
 
 exit 0
