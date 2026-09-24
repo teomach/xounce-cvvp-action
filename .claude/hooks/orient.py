@@ -60,8 +60,16 @@ ANCHOR = ".claude/skills/setup"
 # file's first home, and reachable through this very link
 # (`.claude/method/harness/orient/README.md`) from its second.
 METHOD_LINK = ".claude/method"
-MODELS_PAGE = f"{METHOD_LINK}/MODELS.md"
 REFERENCES_DIR = f"{METHOD_LINK}/method/references"
+
+# The model table is not in any repo: teomach-cockpit owns it and
+# `install-machine-config.sh --apply` places it here, beside the cockpit
+# cheatsheet. So it is cited as the machine path it is read from, written with
+# the `~` and never expanded into the page — an expanded home directory is a
+# machine-local value on a page every session in the repo reads, and the next
+# reader on another box would be told to open a directory that is not theirs.
+# The existence check below expands it; the citation does not.
+MODELS_PAGE = "~/.local/share/teomach/models.md"
 
 TRACKERS = ("simple", "complex")
 BRANCHINGS = ("main", "develop-master")
@@ -435,7 +443,12 @@ BRANCH_PROSE = {
     ),
 }
 
-REFERENCES = ("history-in-git.md", "environment-ladder.md", "judge-doctrine.md")
+REFERENCES = (
+    "history-in-git.md",
+    "environment-ladder.md",
+    "judge-doctrine.md",
+    "MODELS.md",          # the stub, not the table: `MODELS_PAGE` is the table
+)
 
 # What a citation to a page that does not open here is marked with, wherever
 # it is printed. One mark, so the notice at the top can name it and a reader
@@ -447,17 +460,48 @@ _DOTDOT = re.compile(r"(?<!\.)\.\./|/\.\.(?!\.)")
 
 
 def _cited_pages() -> tuple[str, ...]:
-    """Every page the orientation prints a path to, in the order it prints them."""
-    return (MODELS_PAGE, *(f"{REFERENCES_DIR}/{name}" for name in REFERENCES))
+    """Every page *inside the repo* the orientation prints a path to.
+
+    The model table is not one of them and is checked by `_models_missing`
+    below: it is installed on the machine rather than linked into the repo, so
+    it fails for a different reason and is repaired by a different command.
+    """
+    return tuple(f"{REFERENCES_DIR}/{name}" for name in REFERENCES)
+
+
+def _normal(rel: str, through: str) -> None:
+    """Refuse a printed citation that normalisation would rewrite.
+
+    Separated from the existence test because the two halves fail for
+    different reasons and answer differently — `README.md` §Citations survive
+    being tidied. This half is this generator's own constant being wrong, in
+    every repo at once, so it raises wherever the citation points.
+    """
+    if os.path.normpath(rel) != rel:
+        raise Refusal(
+            f"orientation citation `{rel}` does not survive normalisation — "
+            f"a reader who tidies it holds `{os.path.normpath(rel)}`. Cite "
+            f"through `{through}` with no `.` or `..` segments."
+        )
+
+
+def _models_missing() -> bool:
+    """Has this machine not got the installed model table?
+
+    The one place `MODELS_PAGE`'s `~` is expanded: the page is opened at the
+    home directory of whoever is reading, and printed as `~` for everyone.
+    """
+    _normal(MODELS_PAGE, "~")
+    return not Path(os.path.expanduser(MODELS_PAGE)).is_file()
 
 
 def _check_citations(repo: Path) -> list[str]:
     """The cited pages that do not open from this repo — a list, not a raise.
 
-    The check's two halves part company: normalisation raises, and a page that
-    does not open is returned for the caller to declare. `is_file` alone would
-    let the first half through, because it resolves `..` the way the kernel
-    does and so passes a citation that works only copied verbatim.
+    The check's two halves part company: normalisation raises (`_normal`), and
+    a page that does not open is returned for the caller to declare. `is_file`
+    alone would let the first half through, because it resolves `..` the way
+    the kernel does and so passes a citation that works only copied verbatim.
 
     Why the halves differ, and why normalisation is the one that raises:
     `README.md` §Citations survive being tidied. What the returned half then
@@ -465,12 +509,7 @@ def _check_citations(repo: Path) -> list[str]:
     """
     missing = []
     for rel in _cited_pages():
-        if os.path.normpath(rel) != rel:
-            raise Refusal(
-                f"orientation citation `{rel}` does not survive normalisation — "
-                f"a reader who tidies it holds `{os.path.normpath(rel)}`. Cite "
-                f"through `{METHOD_LINK}` with no `.` or `..` segments."
-            )
+        _normal(rel, METHOD_LINK)
         if not (repo / rel).is_file():
             missing.append(rel)
     return missing
@@ -632,14 +671,12 @@ def _degraded_notice(repo: Path, missing: list[str]) -> str:
 
     The standing rules collapse to their directory when all of them are gone,
     which is the common case — the whole link is dead — and keeps the notice
-    to two names rather than four.
+    to one name rather than four. The model table is never in here: it is
+    installed on the machine, not linked into the repo, so its absence is not
+    this link's failure and is not repaired by this line's command.
     """
     refs = [f"{REFERENCES_DIR}/{name}" for name in REFERENCES]
-    shown = [rel for rel in missing if rel not in refs]
-    if all(rel in missing for rel in refs):
-        shown.append(f"{REFERENCES_DIR}/")
-    else:
-        shown += [rel for rel in refs if rel in missing]
+    shown = [f"{REFERENCES_DIR}/"] if all(rel in missing for rel in refs) else list(missing)
     return (
         f"**Degraded.** {'These pages' if len(shown) > 1 else 'This page'} the "
         f"orientation cites {'do' if len(shown) > 1 else 'does'} not open here: "
@@ -667,6 +704,7 @@ def _check_normal(text: str) -> str:
 
 def render(config: dict, manifest: dict, repo: Path) -> str:
     missing = _check_citations(repo)
+    models_dark = _models_missing()
 
     def cite(rel: str) -> str:
         """A cited path, marked where it does not open from this repo."""
@@ -764,12 +802,31 @@ def render(config: dict, manifest: dict, repo: Path) -> str:
     out.append("")
 
     out.append("**No leader chooses these for you:**")
+    # The version is demanded here because `docs/checks/universal.md` judges
+    # for it: a judgement that cannot say which table it read is one nobody
+    # can re-run, and a check asking for what nothing demanded is a finding
+    # against every session in the estate.
+    #
+    # The table is cited at the path the machine carries it, `~` unexpanded:
+    # an expanded home directory is a machine-local value on a page every
+    # session reads, and it would send the next reader on another box to a
+    # directory that is not theirs. When it is not installed, the line says so
+    # here rather than in the degraded notice above — that notice is the method
+    # link's, and this page is repaired by a different command in another repo.
     out.append(
         f"**Fit** — one line before substantive work, carried in a commit "
         f"body (the judge looks for it): the hardest act, the tier it needs "
-        f"per {cite(MODELS_PAGE)}, whether your model fits — only the "
-        f"human can switch — and the cut that fits the context window with "
-        f"room for judge rounds."
+        f"per `{MODELS_PAGE}`{MISSING_MARK if models_dark else ''} at the "
+        f"version it states, whether your model fits — only the human "
+        f"can switch — and the cut that fits the context window with room "
+        f"for judge rounds."
+        + (
+            " That page is not available on this machine: say so in the "
+            "line, choose on the hardest act alone, and do not reconstruct "
+            "the table."
+            if models_dark
+            else ""
+        )
     )
     out.append(
         "**Environment** — the ladder's rung chosen per job — the guard "

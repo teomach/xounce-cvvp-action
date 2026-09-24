@@ -36,9 +36,14 @@ Judge three things:
 
 Where the repo is wired (`.teomach.yml` present), one more: **the fit line
 travelled.** The orientation demands one line — the hardest act, the tier it
-needs per `docs/standards/MODELS.md`, the cut — carried in a commit body on the branch.
-Judge its presence, not its wisdom: no fit line anywhere in the branch's
-messages means the session defaulted silently, and that is a finding;
-choosing the tier was never the judge's to do.
+needs, the cut — carried in a commit body on the branch. The tier comes from
+the model table, which a wired machine carries at
+`~/.local/share/teomach/models.md` and no repo vendors, so the line names the
+version that page states at its head: a judgement that cannot say which table
+it read is one nobody can re-run. Judge its presence, not its wisdom: no fit
+line anywhere in the branch's messages means the session defaulted silently,
+and that is a finding; choosing the tier was never the judge's to do. A line
+saying the page is not on this machine has answered the demand — that is the
+honest reading, not a finding.
 
 Pass unless you can quote the line at fault.
