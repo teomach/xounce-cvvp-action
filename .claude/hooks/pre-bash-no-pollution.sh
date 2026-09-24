@@ -45,11 +45,13 @@
 # target, and one per scope opened or closed. Text a shell will run is
 # followed into: a `$( )`, `<( )`, `>( )` or backtick substitution; the body
 # a shell is handed by `-c`, by `eval`, by a pipe or by a heredoc; the command
-# `find -exec` runs; the words `xargs` passes on. The scans below read only
-# those records, so "at a command position" is a lookup and never a regex,
-# and a `>` in a quoted sentence is a character. `--lex` on the command line
-# prints the records for a payload instead of judging them — the way to see
-# what the guard saw.
+# `find -exec` runs; the words `xargs` passes on. A `find` command's own
+# starting-point paths are read as writes when `-delete` is present, the same
+# reading `rm` and its kin get below — not text followed into another shell.
+# The scans below read only those records, so "at a command position" is a
+# lookup and never a regex, and a `>` in a quoted sentence is a character.
+# `--lex` on the command line prints the records for a payload instead of
+# judging them — the way to see what the guard saw.
 #
 # HONEST LIMITS, stated rather than discovered later:
 #
@@ -638,6 +640,34 @@ while IFS=$'\037' read -r -a rec; do
         for a in ${args[@]+"${args[@]}"}; do
             case "$a" in of=*) outside_write "${a#of=}" "dd" ;; esac
         done
+        ;;
+
+      find)
+        # `-delete` turns `find` into a write: every match under a starting
+        # point outside the tree is one. The starting points are the
+        # leading operands, past `find`'s own global options (`-H`, `-L`,
+        # `-P`, `-D debugopts`, `-Olevel`, which precede paths in valid
+        # `find` syntax and are not the expression) and ended by the first
+        # word that opens the expression (`-name`, `-delete` itself, `(`,
+        # `!`, …) — read from `args`, not `bare`, because `bare` has already
+        # dropped every flag and with it the boundary that separates a
+        # starting point from a primary's own argument (the `x` of `-name x`).
+        has_delete=""
+        for a in ${args[@]+"${args[@]}"}; do
+            [ "$a" = "-delete" ] && has_delete=1
+        done
+        if [ -n "$has_delete" ]; then
+            find_skip_next=""
+            for a in ${args[@]+"${args[@]}"}; do
+                if [ -n "$find_skip_next" ]; then find_skip_next=""; continue; fi
+                case "$a" in
+                  -H|-L|-P|-O0|-O1|-O2|-O3) continue ;;
+                  -D) find_skip_next=1; continue ;;
+                  -*) break ;;
+                  *) outside_write "$a" "find -delete" ;;
+                esac
+            done
+        fi
         ;;
 
       sed)
