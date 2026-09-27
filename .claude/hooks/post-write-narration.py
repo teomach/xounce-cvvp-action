@@ -20,8 +20,10 @@ nags is a guard that gets removed.
 
 **Exit 2 rather than a silent note**: the model sees the stderr of an exit 2 and
 can act on it. Nothing is blocked — the write has already happened, and by
-design: the heuristic is high-precision but it is still a heuristic, and two of
-its hits are sanctioned lines the writer should keep.
+design: the heuristic is high-precision but it is still a heuristic, and the
+kernel page sanctions three kinds of line it can land on — the lint exempts the
+third outright, and the message names all three so the writer keeps what the
+page keeps.
 
 **Standing artefacts only.** The rule binds what a later session loads, so two
 places nothing is carried forward from are out of scope: the scratchpad
@@ -261,10 +263,13 @@ def main() -> None:
         "    guards leave that file alone, so a body may carry as many issue and",
         "    PR references as the work needs and none of it has to survive shell",
         "    quoting on the way;",
-        "  · keep the line only if it is one of the two sanctioned kinds — an",
-        "    as-at or [FLUX] stamp on an external fact, or a functional pointer",
-        "    into history a procedure genuinely routes through. The test is",
-        "    whether the running session uses the line.",
+        "  · keep the line only if it is one of the three sanctioned kinds: the",
+        "    as-at / [FLUX] stamp on an external fact; a functional pointer into",
+        "    history, where a procedure genuinely routes there; a tracker-named",
+        "    pointer beside a claim of a human decision (`owner/repo#123`) —",
+        "    both halves carry the sanction, and a bare `#123`, or a pointer",
+        "    with no claim beside it, is still narration. The test for all",
+        "    three is whether the running session uses the line.",
         "",
         f"The rule: method/references/history-in-git.md; the pattern: {lint_path}",
     ]

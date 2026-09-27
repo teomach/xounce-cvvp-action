@@ -197,6 +197,7 @@ lex() {   # lex <command text> — records on stdout
               "stdbuf:-i stdbuf:-o stdbuf:-e exec:-a", a, " ")
         for (k in a) VALFLAG[a[k]] = 1
         split("-exec -execdir -ok -okdir", a, " "); for (k in a) FINDEXEC[a[k]] = 1
+        FINDBATCH["-exec"] = 1; FINDBATCH["-execdir"] = 1
         nhd = 0; ncmd = 0; prev_pipe = 0; prev_id = 0
     }
     { src = src $0 "\n" }
@@ -302,8 +303,12 @@ lex() {   # lex <command text> — records on stdout
         } else if (v == "find") {
             for (m = k + 1; m <= n; m++) {
                 if (!(w[m] in FINDEXEC)) continue
-                cnt = 0
-                for (j = m + 1; j <= n && w[j] != ";" && w[j] != "+"; j++) sst[++cnt] = w[j]
+                cnt = 0; exec_previous = ""
+                for (j = m + 1; j <= n; j++) {
+                    if (w[j] == ";" || (w[j] == "+" && (w[m] in FINDBATCH) && exec_previous == "{}")) break
+                    sst[++cnt] = w[j]
+                    exec_previous = w[j]
+                }
                 if (cnt) { emit("O" US "sub"); command(sst, cnt, ++ncmd); emit("X" US "sub") }
                 m = j
             }
@@ -644,26 +649,44 @@ while IFS=$'\037' read -r -a rec; do
 
       find)
         # `-delete` turns `find` into a write: every match under a starting
-        # point outside the tree is one. The starting points are the
-        # leading operands, past `find`'s own global options (`-H`, `-L`,
-        # `-P`, `-D debugopts`, `-Olevel`, which precede paths in valid
-        # `find` syntax and are not the expression) and ended by the first
-        # word that opens the expression (`-name`, `-delete` itself, `(`,
-        # `!`, …) — read from `args`, not `bare`, because `bare` has already
-        # dropped every flag and with it the boundary that separates a
-        # starting point from a primary's own argument (the `x` of `-name x`).
+        # point outside the tree is one. `find` reads a bare operand as a
+        # starting point wherever it stands (`find -delete /etc/foo` lists
+        # /etc/foo), so the scan covers every word: it passes `find`'s own
+        # global options (`-H`, `-L`, `-P`, `-D debugopts`, `-Olevel`), passes
+        # each primary that takes an argument together with that argument (the
+        # `x` of `-name x` is not a path), passes an `-exec` family command to
+        # its terminator (`find -exec` is read on its own arm), passes the
+        # expression punctuation (`(`, `)`, `!`, `,`), and reads every other
+        # bare word as a starting point. A primary this list does not know
+        # leaves its argument bare, which reads as a starting point: the
+        # mistake it can make is a refusal of an outside path, never a miss.
+        # Read from `args`, not `bare`, because `bare` has already dropped the
+        # flags that separate a starting point from a primary's argument.
         has_delete=""
         for a in ${args[@]+"${args[@]}"}; do
             [ "$a" = "-delete" ] && has_delete=1
         done
         if [ -n "$has_delete" ]; then
-            find_skip_next=""
+            find_skip_next=0; find_in_exec=""; find_exec_previous=""
             for a in ${args[@]+"${args[@]}"}; do
-                if [ -n "$find_skip_next" ]; then find_skip_next=""; continue; fi
+                if [ -n "$find_in_exec" ]; then
+                    case "$a" in
+                      ";"|"\\;") find_in_exec="" ;;
+                      +) case "$find_in_exec" in
+                           -exec|-execdir) [ "$find_exec_previous" = "{}" ] && find_in_exec="" ;;
+                         esac
+                         find_exec_previous="$a" ;;
+                      *) find_exec_previous="$a" ;;
+                    esac
+                    continue
+                fi
+                if [ "$find_skip_next" -gt 0 ]; then find_skip_next=$(( find_skip_next - 1 )); continue; fi
                 case "$a" in
-                  -H|-L|-P|-O0|-O1|-O2|-O3) continue ;;
-                  -D) find_skip_next=1; continue ;;
-                  -*) break ;;
+                  -exec|-execdir|-ok|-okdir)               find_in_exec="$a"; find_exec_previous="" ;;
+                  -D|-name|-iname|-path|-ipath|-wholename|-iwholename|-regex|-iregex|-regextype|-lname|-ilname|-type|-xtype|-newer|-anewer|-cnewer|-newer[acBm][acBmt]|-perm|-user|-group|-uid|-gid|-size|-links|-inum|-samefile|-used|-atime|-ctime|-mtime|-amin|-cmin|-mmin|-fstype|-context|-maxdepth|-mindepth|-printf|-fprint|-fprint0|-fls|-files0-from)
+                                                            find_skip_next=1 ;;
+                  -fprintf)                                 find_skip_next=2 ;;
+                  -*|"("|")"|"\\("|"\\)"|"!"|",")           ;;
                   *) outside_write "$a" "find -delete" ;;
                 esac
             done

@@ -472,10 +472,10 @@ def _cited_pages() -> tuple[str, ...]:
 def _normal(rel: str, through: str) -> None:
     """Refuse a printed citation that normalisation would rewrite.
 
-    Separated from the existence test because the two halves fail for
-    different reasons and answer differently — `README.md` §Citations survive
-    being tidied. This half is this generator's own constant being wrong, in
-    every repo at once, so it raises wherever the citation points.
+    Why this half is separated from the existence test, and raises where that
+    other half only lists: `_check_citations`'s docstring. This half is this
+    generator's own constant being wrong, in every repo at once, so it raises
+    wherever the citation points.
     """
     if os.path.normpath(rel) != rel:
         raise Refusal(
@@ -671,9 +671,9 @@ def _degraded_notice(repo: Path, missing: list[str]) -> str:
 
     The standing rules collapse to their directory when all of them are gone,
     which is the common case — the whole link is dead — and keeps the notice
-    to one name rather than four. The model table is never in here: it is
-    installed on the machine, not linked into the repo, so its absence is not
-    this link's failure and is not repaired by this line's command.
+    to one name rather than four. The model table is never in here, for the
+    reason `_cited_pages`'s docstring gives: its absence is not this link's
+    failure.
     """
     refs = [f"{REFERENCES_DIR}/{name}" for name in REFERENCES]
     shown = [f"{REFERENCES_DIR}/"] if all(rel in missing for rel in refs) else list(missing)
@@ -807,12 +807,12 @@ def render(config: dict, manifest: dict, repo: Path) -> str:
     # can re-run, and a check asking for what nothing demanded is a finding
     # against every session in the estate.
     #
-    # The table is cited at the path the machine carries it, `~` unexpanded:
-    # an expanded home directory is a machine-local value on a page every
-    # session reads, and it would send the next reader on another box to a
-    # directory that is not theirs. When it is not installed, the line says so
-    # here rather than in the degraded notice above — that notice is the method
-    # link's, and this page is repaired by a different command in another repo.
+    # The table is cited at the path the machine carries it, `~` unexpanded —
+    # why is stated once, in the comment above `MODELS_PAGE`'s own definition.
+    # When it is not installed, the line says so here rather than in the
+    # degraded notice above — that notice is the method link's, and the model
+    # table's absence is a different failure for the reason `_cited_pages`'s
+    # docstring gives.
     out.append(
         f"**Fit** — one line before substantive work, carried in a commit "
         f"body (the judge looks for it): the hardest act, the tier it needs "
