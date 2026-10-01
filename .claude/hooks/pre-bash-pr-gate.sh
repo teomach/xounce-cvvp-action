@@ -81,7 +81,7 @@
 #   · It matches the command AS WRITTEN. A `bash -c` with a constructed
 #     string gets past it; quoting `gh` is enough. The matcher refuses to
 #     look inside quotes ON PURPOSE — see below.
-#   · Only Claude Code runs it. An agent on opencode or agy is unguarded, and
+#   · Only Claude Code runs it. An agent on opencode is unguarded, and
 #     so is a human in their own terminal — hooks fire for tool calls, not
 #     for shells.
 #   · The payload's `cwd` is the SESSION's directory, not where the command

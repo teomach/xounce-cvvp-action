@@ -50,7 +50,9 @@ missing_layer() { generated+=("$1"); }
 
 # --- wired at all, and at which version -------------------------------------
 declared=""
+unwired=""
 if [ ! -f "$REPO/.teomach.yml" ]; then
+    unwired=1
     add "no .teomach.yml — this repo is not wired, but it is running the guards."
 else
     declared=$(sed -n 's/^[[:space:]]*guard_set:[[:space:]]*\([^[:space:]#]*\).*/\1/p' \
@@ -196,7 +198,23 @@ fi
 # rewires it — told, not silently degraded. This guard still only reads and
 # refuses (§10), and every repair there is happens in the branch above and
 # never in this one.
-if [ -n "$clone" ] && [ -f "$clone/scripts/wire-repo.py" ]; then
+# `adopt`, not `update`, where there is no .teomach.yml: `update` refuses
+# exactly that state, so naming it would send the reader to a refusal.
+# `orient.py:load` gives the same remedy for the same state; move both.
+verb=update
+[ -z "$unwired" ] || verb=adopt
+if [ -n "$clone" ] && [ -f "$clone/scripts/wire-repo.py" ] && [ -n "$unwired" ]; then
+    remedy="  1. Tell the human what is listed above.
+  2. Run the one command that wires this repo for the first time:
+
+       python3 \"$clone/scripts/wire-repo.py\" adopt --repo \"$REPO\"
+
+     It writes .teomach.yml, installs the resident set, and reports
+     everything it changed. In a terminal it asks what it cannot infer
+     (the type, a one-line summary); without one it names the flag each
+     answer needs — --type generic is a real answer for a repo with none.
+  3. Then \`/setup\` records what the installer cannot know."
+elif [ -n "$clone" ] && [ -f "$clone/scripts/wire-repo.py" ]; then
     remedy="  1. Tell the human what is listed above.
   2. Run the one command that rewires this repo:
 
@@ -215,7 +233,7 @@ else
   2. Get one: clone teomach-skills and run its scripts/install-skills.sh.
   3. Then run:
 
-       python3 <teomach-skills clone>/scripts/wire-repo.py update --repo \"$REPO\""
+       python3 <teomach-skills clone>/scripts/wire-repo.py $verb --repo \"$REPO\""
 fi
 
 body="STOP — the Teòmach guards in this repo are broken. Do not treat this session as guarded.

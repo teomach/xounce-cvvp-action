@@ -322,9 +322,14 @@ def _as_list(value, key: str, path: Path) -> list:
 def load(repo: Path, profiles: Path | None) -> tuple[dict, dict, Path]:
     config_path = repo / CONFIG_NAME
     if not config_path.is_file():
+        # `adopt`, not `update`: `update` refuses a repo with no .teomach.yml.
+        clone = _resolve_clone(repo)
         raise Refusal(
             f"{config_path}: does not exist, so this repo is not wired for the "
-            f"method. Run `setup` to write it."
+            f"method. The installer writes it: `python3 "
+            f"{clone if clone is not None else '<teomach-skills clone>'}"
+            f"/scripts/wire-repo.py adopt --repo {repo.resolve()}`. Then "
+            f"`/setup` records what the installer cannot know."
         )
     config = read_yaml(config_path)
 
@@ -444,6 +449,7 @@ BRANCH_PROSE = {
 }
 
 REFERENCES = (
+    "the-gate.md",
     "history-in-git.md",
     "environment-ladder.md",
     "judge-doctrine.md",
@@ -747,13 +753,14 @@ def render(config: dict, manifest: dict, repo: Path) -> str:
     out.append("")
 
     out.append(
-        "**The method.** One kernel runs the same lifecycle for every kind of "
-        "work — **grill → to-spec → to-tickets → implement → review → docs → "
-        "handoff** — with the standing disciplines (`diagnose`, `verify` and "
-        "their kin, each in the skill listing) callable the moment they apply. "
-        "Domain packs hold only what differs. **The gate:** a merged artefact "
-        "is the agreed one and its merge SHA is its version; the build skills "
-        "refuse to run ahead of it, and the human merges — always."
+        "**The method.** One kernel: **grill → to-spec "
+        "→ to-tickets → implement → review → docs → handoff**. Disciplines "
+        "(`diagnose`, `verify`, etc.) apply when needed; domain packs hold "
+        "only what differs. **The gate:** a merged artefact is agreed and "
+        "versioned by merge SHA; build skills wait for it. "
+        "The human decides what merges: ask if no "
+        "instruction; carry out an explicit instruction to merge "
+        f"({cite_name('the-gate.md')} below)."
     )
     out.append("")
     out.append(
