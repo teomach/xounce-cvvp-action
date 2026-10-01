@@ -57,8 +57,8 @@
 #     tests for this guard positively; that is the only reason its silence
 #     means anything.
 #   · Only Claude Code's Agent tool is seen. A lane started from Bash
-#     (`claude -p` in a worktree), the Workflow tool's agents, opencode and
-#     agy all pass unguarded — the Bash route is at least visible to the
+#     (`claude -p` in a worktree), the Workflow tool's agents and opencode
+#     all pass unguarded — the Bash route is at least visible to the
 #     transcript, and the habitual path this guard closes is the one the
 #     measured miss actually took.
 #   · The brief is read as text. A lane phrased without an issue number and
