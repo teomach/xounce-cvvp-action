@@ -4,4 +4,5 @@ overlays: []
 tier: 2
 summary: Lybica Security Scan — the GitHub Action wrapping CVVP
 branching: develop-master
-guard_set: 24
+guard_set: 25
+group_captain: tominglis

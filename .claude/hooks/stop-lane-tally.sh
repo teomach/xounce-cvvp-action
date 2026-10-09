@@ -2,10 +2,10 @@
 # Source: teomach-skills harness/hooks/stop-lane-tally.sh —
 # edit it there and re-run `scripts/wire-repo.py update`, never edit a copy.
 # Stop — uncommitted build-path work in a cockpit session, tallied for the
-# human at turn end.
+# Wing Commander at turn end.
 #
 # WHY THIS EXISTS. The specimens behind the lane-default guard were noticed
-# only because the human asked "why are you not flying wingmen?" — twice.
+# only because the Wing Commander asked "why are you not flying wingmen?" — twice.
 # This puts that question's evidence in the transcript before it has to be
 # asked: one line, at the end of a turn, when a cockpit session in a repo's
 # main checkout holds uncommitted changes on the build surface (the whole
@@ -13,7 +13,7 @@
 #
 # WARN, NEVER BLOCK — the stop-uncommitted.sh reading: a turn ending
 # mid-work is normal, and Stop cannot tell "done" from "paused". It speaks as
-# `systemMessage` (to the human, not the model's context): the model already
+# `systemMessage` (to the Wing Commander, not the model's context): the model already
 # met the pre-edit guard at the moment of choice; this line is for the eyes
 # the guard exists to spare.
 #

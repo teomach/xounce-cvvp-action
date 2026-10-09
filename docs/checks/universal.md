@@ -46,4 +46,18 @@ and that is a finding; choosing the tier was never the judge's to do. A line
 saying the page is not on this machine has answered the demand — that is the
 honest reading, not a finding.
 
+Where the repo also names a Group Captain — a `group_captain` key in
+`.teomach.yml` — one more: **the Group Captain record holds.** The record is
+the file at the repo root that `docs/standards/ranks.md` names, one entry
+per decision, each with an ID and the paths it governs. For each entry whose
+governed paths the diff touches, does the diff conflict with the decision as
+written? A conflict is a finding naming the entry's ID and quoting the
+decision beside the line that contradicts it. Touching a governed path
+without contradicting the decision is not a finding. A diff that changes the
+record or the `group_captain` key is a clash by definition: a finding naming
+which, whatever the change says. A clash does not stop the PR opening; it
+holds the merge for the Group Captain, so the finding also says whether the
+PR body names the entry IDs and asks for the `group-captain` label. A repo
+with no key has no record to hold, and this item does not apply.
+
 Pass unless you can quote the line at fault.

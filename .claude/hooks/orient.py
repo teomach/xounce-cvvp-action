@@ -382,6 +382,13 @@ def _validate_overrides(config: dict, path: Path):
         _one_of(config["branching"], BRANCHINGS, "branching", path)
     if config.get("tier") is not None:
         _one_of(config["tier"], TIERS, "tier", path)
+    captain = config.get("group_captain")
+    if captain is not None and not (isinstance(captain, str) and LOGIN.fullmatch(captain)):
+        raise Refusal(
+            f"{path}: `group_captain: {captain}` is not a GitHub login. Set it "
+            f"to the Group Captain's login, or remove the key for a repo with "
+            f"no Group Captain."
+        )
 
 
 def _find_profiles(repo: Path) -> Path:
@@ -423,6 +430,67 @@ def _validate(manifest: dict, path: Path, profile_type: str):
             f"orientation names, capped at six; past that the type is being "
             f"described rather than routed."
         )
+
+
+# --------------------------------------------------------------------------
+# Who is at the controls — `specs/2026-10-05-ranks.md` §4 in teomach-skills.
+#
+# The signed-in GitHub account is the test of rank, and the repo's own
+# `group_captain` key names the one login that ranks above the rest. Every
+# way of not knowing the login — no `gh`, `gh` signed out, `gh` not answering
+# in time — resolves to Wing Commander and says the login could not be read:
+# no path resolves an unidentified operator upward.
+#
+# The call is bounded because it runs at every session start, after the
+# self-heal has had its `HEAL_TIMEOUT`; the two together stay inside the
+# hook's own 15 s, so a slow network costs the session its login and never
+# its page.
+# --------------------------------------------------------------------------
+
+GH_TIMEOUT = 3
+RECORD_NAME = "GROUP-CAPTAIN.md"
+
+# GitHub's own shape for a login. Anything else `gh` prints is not one, and is
+# read as no answer rather than slotted into the page.
+LOGIN = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}")
+
+
+def operator_login() -> tuple[str | None, str]:
+    """The signed-in login, or None and why it could not be read."""
+    try:
+        done = subprocess.run(
+            ["gh", "api", "user", "--jq", ".login"],
+            capture_output=True, text=True, timeout=GH_TIMEOUT,
+            stdin=subprocess.DEVNULL,
+        )
+    except FileNotFoundError:
+        return None, "no `gh` on this machine"
+    except subprocess.TimeoutExpired:
+        return None, f"`gh` did not answer in {GH_TIMEOUT} s"
+    except OSError as exc:
+        return None, f"`gh` would not run ({exc.__class__.__name__})"
+    login = done.stdout.strip()
+    if done.returncode != 0 or not LOGIN.fullmatch(login):
+        return None, "`gh` gave no login"
+    return login, ""
+
+
+def rank_line(config: dict, repo: Path) -> str:
+    """One line: the operator's login and rank, and, for a Wing Commander in a
+    repo with a Group Captain, that the repo keeps a record and where."""
+    captain = config.get("group_captain")
+    login, why = operator_login()
+    if captain and login and login.casefold() == captain.casefold():
+        return f"**At the controls** — `{login}`, the Group Captain."
+    who = f"`{login}`" if login else f"login unreadable ({why})"
+    line = f"**At the controls** — {who}: a Wing Commander."
+    if captain:
+        mark = "" if (repo / RECORD_NAME).is_file() else MISSING_MARK
+        line += (
+            f" Group Captain `{captain}`'s decisions are on record in "
+            f"`{RECORD_NAME}`{mark}."
+        )
+    return line
 
 
 # --------------------------------------------------------------------------
@@ -567,7 +635,7 @@ def _install_dir() -> Path:
 
 
 def _resolve_clone(repo: Path) -> Path | None:
-    """A teomach-skills clone this repo can name, or None to ask the human.
+    """A teomach-skills clone this repo can name, or None to ask the Wing Commander.
 
     The same order `_find_profiles` resolves the manifests in, for the same
     reason — the kernel symlink already says where the method is, so nothing
@@ -648,14 +716,14 @@ def _repair(repo: Path) -> str:
             "managed block, all tracked — so whatever of it is behind the "
             "current standard lands in this branch's diff, mid-flight. Work "
             "without the pages, say where you report that you did, and leave "
-            "the fix to the human: "
+            "the fix to the Wing Commander: "
         )
     else:
         who = "Restore it with "
     if clone is None:
         return (
             f"{who}{command} — no teomach-skills clone resolves from here, so "
-            f"the human supplies `<clone>`; do not go looking for one."
+            f"the Wing Commander supplies `<clone>`; do not go looking for one."
         )
     return f"{who}{command}."
 
@@ -750,6 +818,7 @@ def render(config: dict, manifest: dict, repo: Path) -> str:
         f"**Its type** — `{manifest['name']}`{also}, tier {tier}. "
         f"{manifest['summary']}"
     )
+    out.append(rank_line(config, repo))
     out.append("")
 
     out.append(
@@ -758,16 +827,16 @@ def render(config: dict, manifest: dict, repo: Path) -> str:
         "(`diagnose`, `verify`, etc.) apply when needed; domain packs hold "
         "only what differs. **The gate:** a merged artefact is agreed and "
         "versioned by merge SHA; build skills wait for it. "
-        "The human decides what merges: ask if no "
+        "The Wing Commander decides what merges: ask if no "
         "instruction; carry out an explicit instruction to merge "
         f"({cite_name('the-gate.md')} below)."
     )
     out.append("")
     out.append(
-        "**Reaching a skill.** Some are typed by the human (`/grill`, "
+        "**Reaching a skill.** Some are typed by the Wing Commander (`/grill`, "
         "`/to-spec`, `/implement`) and you cannot invoke them yourself: when "
         "one is the right next move, say so, then read and follow "
-        "`.claude/skills/<name>/SKILL.md` while the human decides. Do not hunt "
+        "`.claude/skills/<name>/SKILL.md` while the Wing Commander decides. Do not hunt "
         "with `find` — the entries are symlinks `find` will not follow."
     )
     out.append("")
@@ -824,7 +893,7 @@ def render(config: dict, manifest: dict, repo: Path) -> str:
         f"**Fit** — one line before substantive work, carried in a commit "
         f"body (the judge looks for it): the hardest act, the tier it needs "
         f"per `{MODELS_PAGE}`{MISSING_MARK if models_dark else ''} at the "
-        f"version it states, whether your model fits — only the human "
+        f"version it states, whether your model fits — only the Wing Commander "
         f"can switch — and the cut that fits the context window with room "
         f"for judge rounds."
         + (
@@ -1068,7 +1137,7 @@ def heal(repo: Path, here: Path, out=None) -> None:
     if remaining:
         out.write(
             f"**Still incomplete after the repair:** {'; '.join(remaining)}. Tell "
-            f"the human; the orientation below is what this state renders.\n\n"
+            f"the Wing Commander; the orientation below is what this state renders.\n\n"
         )
         return
     out.write(
@@ -1083,7 +1152,7 @@ def refusal_text(message: str) -> str:
     return (
         "# Orientation unavailable — this repo cannot be oriented\n\n"
         f"{message}\n\n"
-        "No orientation was generated. Tell the human what is wrong above "
+        "No orientation was generated. Tell the Wing Commander what is wrong above "
         "before doing any work that assumes the method is wired.\n"
     )
 

@@ -28,7 +28,7 @@ which number but not which repo, so it cannot be told from any other number in
 the file.
 
 A CLAIM OF A HUMAN DECISION IS ASKED FOR ITS ARTEFACT, BESIDE THE CLAIM. A
-memory saying the human approved, ruled, agreed, signed off or authorised is
+memory saying the Wing Commander approved, ruled, agreed, signed off or authorised is
 asked to cite, within WINDOW characters of the claim, the artefact carrying
 that decision. This clause outranks the silence above: a routed memory is
 exempt from the routing question, never from this one, because a memory store
@@ -278,7 +278,7 @@ def claim_lines(target: Path, text: str, claims: list[tuple[int, str]]) -> list[
         out.append(f"  … and {len(claims) - 5} more")
     out += [
         "",
-        "  A claim that a human approved, ruled, agreed, signed off or",
+        "  A claim that a Wing Commander approved, ruled, agreed, signed off or",
         "  authorised names the artefact carrying that decision beside the",
         "  claim — the issue comment, the PR review, `owner/repo#123` — not",
         "  merely somewhere in the file. A pointer that is not beside the",
