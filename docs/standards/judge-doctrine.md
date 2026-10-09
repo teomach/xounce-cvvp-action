@@ -1,5 +1,5 @@
-<!-- Source: teomach-skills method/references/judge-doctrine.md @ 0eab023 —
-     rendered at guard-set v24 by scripts/wire-repo.py; edit it at source and
+<!-- Source: teomach-skills method/references/judge-doctrine.md @ b1830fa —
+     rendered at guard-set v25 by scripts/wire-repo.py; edit it at source and
      re-run `scripts/wire-repo.py update`, never edit this copy. -->
 
 # The judge — lean core
@@ -18,10 +18,10 @@ what findings mean, and it is deliberately generic.
 |---|---|---|
 | Judge | Was every obligation actually checked? | The author's — things quietly skipped |
 | Cross-model | Is this right, judged from outside? | The model family's — its own tells (`review-independence.md`) |
-| Human (the gate) | Should we ship it? | Everything about intent and taste |
+| Wing Commander (the gate) | Should we ship it? | Everything about intent and taste |
 
 The judge filters; it never approves. A clean judge report means the diff is
-worth a human's time, nothing more.
+worth a Wing Commander's time, nothing more.
 
 ## Checks are derived, not authored — and efficiency is a design constraint
 

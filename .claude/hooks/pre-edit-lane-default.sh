@@ -114,7 +114,7 @@ fi
     echo "$signal."
     echo
     echo "Build work flies as a lane by default. Declare this piece's routing and"
-    echo "continue — one command, nothing here waits on the human:"
+    echo "continue — one command, nothing here waits on the Wing Commander:"
     echo
     echo "  the work has (or now gets) an issue and a wingman carries it:"
     echo "      git config teomach.$sid.route \"LANE: #<issue>\""

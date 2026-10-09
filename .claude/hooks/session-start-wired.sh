@@ -21,20 +21,28 @@
 # there reaches the user's terminal but not the model. The refusal has to land
 # in the model's context to change what the session does next, so the guard
 # exits 0 and writes it to `hookSpecificOutput.additionalContext`, with a
-# `systemMessage` for the human beside it.
+# `systemMessage` for the Wing Commander beside it.
 
 set -uo pipefail
 # shellcheck source=_payload.sh
 . "$(dirname "${BASH_SOURCE[0]}")/_payload.sh"
 
 HOOKS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-GUARDS=(session-start-wired.sh pre-bash-no-pollution.sh pre-bash-stage-by-path.sh pre-bash-pr-gate.sh pre-agent-lane-dispatch.sh pre-edit-lane-default.sh post-write-narration.py post-write-memory-routing.py stop-uncommitted.sh stop-lane-tally.sh)
+GUARDS=(session-start-wired.sh pre-bash-no-pollution.sh pre-bash-stage-by-path.sh pre-bash-pr-gate.sh pre-bash-merge-hold.sh pre-agent-lane-dispatch.sh pre-edit-lane-default.sh pre-edit-group-captain.py post-write-narration.py post-write-memory-routing.py stop-uncommitted.sh stop-lane-tally.sh)
 
 payload_read
 REPO="$(repo_root "$(json_str cwd)")"
 
 problems=()
 add() { problems+=("$1"); }
+
+# Is this tree a git worktree — where a lane works? The shell form of
+# `orient.py:_is_worktree`, the one definition of it: `.git` is a file whose
+# `gitdir:` line has a `worktrees` segment (a submodule's has none). Move both.
+is_worktree() {
+    [ -f "$REPO/.git" ] || return 1
+    tr '\134' '/' <"$REPO/.git" | grep -Eq '^[[:space:]]*gitdir[[:space:]]*:.*/worktrees/'
+}
 
 # THE GENERATED LAYER, kept apart from `problems` for the whole length of this
 # hook. `.claude/skills/` and `.claude/method` are materialised against this
@@ -51,6 +59,7 @@ missing_layer() { generated+=("$1"); }
 # --- wired at all, and at which version -------------------------------------
 declared=""
 unwired=""
+stale=""
 if [ ! -f "$REPO/.teomach.yml" ]; then
     unwired=1
     add "no .teomach.yml — this repo is not wired, but it is running the guards."
@@ -68,6 +77,7 @@ else
 fi
 
 if [ -n "$declared" ] && [ -n "$installed" ] && [ "$declared" != "$installed" ]; then
+    stale=1
     add "guard set is STALE: .teomach.yml says '$declared', the installed scripts are '$installed'."
 fi
 
@@ -79,6 +89,8 @@ for g in "${GUARDS[@]}"; do
 done
 [ -f "$HOOKS_DIR/_payload.sh" ] || add "shared helper missing: .claude/hooks/_payload.sh (the shell guards cannot read their payload without it)."
 [ -f "$HOOKS_DIR/_target.py" ] || add "shared helper missing: .claude/hooks/_target.py (the post-write guards skip themselves without it)."
+[ -f "$HOOKS_DIR/_walk.sh" ] || add "shared helper missing: .claude/hooks/_walk.sh (the PR gate and the merge hold cannot read a command without it)."
+[ -f "$HOOKS_DIR/_ranks.py" ] || add "shared helper missing: .claude/hooks/_ranks.py (the Group Captain guards cannot read the record without it)."
 
 SETTINGS="$REPO/.claude/settings.json"
 if [ ! -f "$SETTINGS" ]; then
@@ -133,7 +145,7 @@ fi
 # gets the refusal rather than a broken hook.
 esc() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | awk '{printf "%s\\n", $0}'; }
 
-GUARDS_LIVE="Teòmach guards v$installed are installed, dispatched and current in this repo: Bash calls are checked for global installs, writes outside the tree, and sweep staging (\`git add -A\`/\`git commit -a\` — stage by path), \`gh pr create\` for a judge report standing for this branch at HEAD, Agent calls for lane-shaped dispatches (lanes fly as \`wingman\` tabs), cockpit edits under the repo's declared build paths for a routing declaration (build work flies as a lane; straight-through is declared, not asked), markdown edits for decision narration, memory writes for the routing question (does this fact belong in a channel?), and the end of each turn for uncommitted work and untallied build-path changes."
+GUARDS_LIVE="Teòmach guards v$installed are installed, dispatched and current in this repo: Bash calls are checked for global installs, writes outside the tree, and sweep staging (\`git add -A\`/\`git commit -a\` — stage by path), \`gh pr create\` for a judge report standing for this branch at HEAD, Agent calls for lane-shaped dispatches (lanes fly as \`wingman\` tabs), cockpit edits under the repo's declared build paths for a routing declaration (build work flies as a lane; straight-through is declared, not asked), \`gh pr merge\` by a Wing Commander of a PR held for the Group Captain, edits to a path the Group Captain record governs (warned, never blocked), markdown edits for decision narration, memory writes for the routing question (does this fact belong in a channel?), and the end of each turn for uncommitted work and untallied build-path changes."
 
 # --- where a rewire would come from -----------------------------------------
 # The machine's own install anchors the method clone: `setup` is the kernel
@@ -201,10 +213,24 @@ fi
 # `adopt`, not `update`, where there is no .teomach.yml: `update` refuses
 # exactly that state, so naming it would send the reader to a refusal.
 # `orient.py:load` gives the same remedy for the same state; move both.
+# A stale set in a worktree is the one state whose remedy is not a command: the
+# rewire re-applies the whole tracked resident set into this branch's diff, so
+# it is the roll's (`flight-roll`, teomach-cockpit), not the session's in here.
 verb=update
 [ -z "$unwired" ] || verb=adopt
-if [ -n "$clone" ] && [ -f "$clone/scripts/wire-repo.py" ] && [ -n "$unwired" ]; then
-    remedy="  1. Tell the human what is listed above.
+heading="What to do, before any other work:"
+if [ -n "$stale" ] && is_worktree; then
+    heading="What to do:"
+    remedy="  1. Tell the Wing Commander what is listed above.
+  2. Do not run wire-repo.py here. This is a git worktree, and a rewire
+     re-applies the whole tracked resident set — .claude/hooks/,
+     .claude/settings.json, CLAUDE.md's managed block — into this branch's
+     diff, mid-flight. The rewire is the roll's, not this session's:
+     \`flight-roll <version>\` (teomach-cockpit) performs it.
+  3. Carry on with the work you were given, and say in your report that this
+     branch ran with a stale guard set."
+elif [ -n "$clone" ] && [ -f "$clone/scripts/wire-repo.py" ] && [ -n "$unwired" ]; then
+    remedy="  1. Tell the Wing Commander what is listed above.
   2. Run the one command that wires this repo for the first time:
 
        python3 \"$clone/scripts/wire-repo.py\" adopt --repo \"$REPO\"
@@ -215,7 +241,7 @@ if [ -n "$clone" ] && [ -f "$clone/scripts/wire-repo.py" ] && [ -n "$unwired" ];
      answer needs — --type generic is a real answer for a repo with none.
   3. Then \`/setup\` records what the installer cannot know."
 elif [ -n "$clone" ] && [ -f "$clone/scripts/wire-repo.py" ]; then
-    remedy="  1. Tell the human what is listed above.
+    remedy="  1. Tell the Wing Commander what is listed above.
   2. Run the one command that rewires this repo:
 
        python3 \"$clone/scripts/wire-repo.py\" update --repo \"$REPO\"
@@ -227,7 +253,7 @@ elif [ -n "$clone" ] && [ -f "$clone/scripts/wire-repo.py" ]; then
        \"$REPO/.claude/hooks/session-start-orient.sh\"
      The skill listing itself refreshes at the next session start."
 else
-    remedy="  1. Tell the human: this machine has no teomach-skills install to rewire
+    remedy="  1. Tell the Wing Commander: this machine has no teomach-skills install to rewire
      from ($install_dir/setup does not resolve), so the method cannot
      bootstrap here.
   2. Get one: clone teomach-skills and run its scripts/install-skills.sh.
@@ -242,7 +268,7 @@ body="STOP — the Teòmach guards in this repo are broken. Do not treat this se
 for p in "${problems[@]}"; do body="$body  · $p
 "; done
 body="$body
-What to do, before any other work:
+$heading
 
 $remedy
 

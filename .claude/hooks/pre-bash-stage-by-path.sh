@@ -27,6 +27,10 @@
 #   · A missing or non-executable hook script FAILS OPEN (measured, Claude Code
 #     2.1.220). The SessionStart guard tests for it positively; that is the
 #     only reason its silence means anything.
+#   · The command word is found past assignments, `{`, `(`, `!`, `time`, the
+#     reserved words `then do else elif if while until`, and an opener glued to
+#     it. A sweep reached any other way — `$(…)` or a backtick substitution,
+#     `xargs`, `env`, `sudo`, `command`, a background `&` — is not seen.
 #   · It reads the command AS WRITTEN. A `bash -c` with a constructed string
 #     is not seen. It closes the habitual path, which is the one that sweeps.
 #   · Quoted spans are data and are stripped before matching, so a commit
@@ -98,8 +102,23 @@ while IFS= read -r seg; do
     [ -n "${seg// /}" ] || continue
     # shellcheck disable=SC2206   # deliberate: split the segment into words
     words=($seg)
-    while [ "${#words[@]}" -gt 0 ] && [[ "${words[0]}" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; do
-        words=("${words[@]:1}")
+    # Find the command word: past assignments, shell openers (`{`, `(`, `!`,
+    # `time`), the reserved words that introduce a command, and an opener
+    # glued to the word (`(git`, `{git`).
+    while [ "${#words[@]}" -gt 0 ]; do
+        w="${words[0]}"
+        if [[ "$w" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; then
+            words=("${words[@]:1}")
+        elif [[ "$w" =~ ^[\(\{]+$ ]]; then
+            words=("${words[@]:1}")
+        elif [[ "$w" =~ ^[\(\{]+. ]]; then
+            words[0]="${w#"${w%%[!({]*}"}"
+        else
+            case "$w" in
+                '!'|time|then|do|else|elif|if|while|until) words=("${words[@]:1}") ;;
+                *) break ;;
+            esac
+        fi
     done
     [ "${#words[@]}" -gt 0 ] || continue
     [ "${words[0]}" = git ] || continue

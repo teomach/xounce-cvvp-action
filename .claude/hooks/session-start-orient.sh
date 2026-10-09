@@ -21,7 +21,7 @@
 # session never seeing the text, and the refusal is the one message that most
 # needs to arrive. Blocking an unwired session is the wiring guard's job, not
 # this one's. A real failure — no generator, no python3 — goes to stderr and
-# still exits 0, because a broken orientation must not stop the human working.
+# still exits 0, because a broken orientation must not stop the Wing Commander working.
 set -uo pipefail
 
 here="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
@@ -46,7 +46,7 @@ fi
 # which is what makes an agreement worth having rather than assuming.
 #
 # Read only when there is a payload to read: `payload_read` is a `cat`, and
-# the wiring guard's own remedy tells a human to run this script from a
+# the wiring guard's own remedy tells a Wing Commander to run this script from a
 # terminal to see the orientation without restarting. A `-t 0` test is what
 # keeps that instruction from hanging on stdin.
 if [[ -t 0 ]]; then

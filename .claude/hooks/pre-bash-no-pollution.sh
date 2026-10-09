@@ -554,7 +554,7 @@ while IFS=$'\037' read -r -a rec; do
 "Do instead:" \
 "  · a runtime or service the job needs — an ephemeral \`podman compose\` world" \
 "  · a change the machine genuinely needs — raise it as declared state, in the" \
-"    repo that owns the estate, and let the human apply it"
+"    repo that owns the estate, and let the Wing Commander apply it"
         ;;
 
       npm|pnpm|bun)
@@ -622,7 +622,7 @@ while IFS=$'\037' read -r -a rec; do
 "" \
 "Do instead:" \
 "  · the job needs a runtime beside it — an ephemeral \`podman compose\` world" \
-"  · the machine genuinely needs it — raise it as declared state for the human"
+"  · the machine genuinely needs it — raise it as declared state for the Wing Commander"
             ;;
         esac
         ;;

@@ -43,7 +43,7 @@
 # — the set's shape (a stated reason, typed fresh each time, never a flag),
 # carried where an Agent call's only writable surface is. It exists because
 # the boundary has real exceptions: a wired repo on a machine with no cockpit
-# has no `wingman` verb to refuse toward, and a human may deliberately direct
+# has no `wingman` verb to refuse toward, and a Wing Commander may deliberately direct
 # a subagent at issue-shaped work. The reason lands in the transcript AND in
 # the subagent's own brief, which is the point. Known limit, unlike the Bash
 # hatch: a prompt has no quoted-vs-invoked distinction, so any occurrence of
@@ -133,7 +133,7 @@ fi
     echo "    tool without a worktree and without a work-this-issue brief; that"
     echo "    use is never blocked"
     echo "  · genuinely a subagent's job — no cockpit on this machine, or the"
-    echo "    human said so — state it in the prompt itself:"
+    echo "    Wing Commander said so — state it in the prompt itself:"
     echo "        FLIGHT_LANE_BY_AGENT: <one sentence: why this must be a subagent>"
     echo "    The reason rides in the transcript and in the subagent's brief."
     echo
